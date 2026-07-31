@@ -34,7 +34,7 @@ def _parse_formats(value: str) -> set[str]:
     "--output-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Directory for transcript files (default: beside each source file).",
+    help="Directory for transcript files (default: current working directory).",
 )
 @click.option(
     "-f",
@@ -129,9 +129,8 @@ def main(
         try:
             wav = extract_whisper_wav(media)
             result = transcribe_audio(wav, cfg)
-            stem_dir = output_dir if output_dir is not None else media.parent
-            if output_dir is not None:
-                stem_dir.mkdir(parents=True, exist_ok=True)
+            stem_dir = (output_dir if output_dir is not None else Path.cwd()).resolve()
+            stem_dir.mkdir(parents=True, exist_ok=True)
             stem = stem_dir / media.stem
             written = write_outputs(result, stem, format_set)
             lang = result.language or "unknown"

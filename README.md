@@ -22,7 +22,17 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-This installs the `transcribe` command.
+This installs the `transcribe` command into that environment.
+
+### Use from any terminal (optional)
+
+Put the venv’s `transcribe` on your `PATH` (for example via `~/bin`) and keep a user config at `~/.config/local-transcription-service/config.yaml` so model paths work outside the project directory. Then from any folder:
+
+```bash
+transcribe /path/to/file.mp4
+# writes meeting.txt / meeting.srt into the current directory
+transcribe /path/to/file.mp4 -o ~/Desktop/transcripts
+```
 
 ## Quick start
 
@@ -32,10 +42,11 @@ transcribe interview.wav
 transcribe ./recordings/
 ```
 
-By default each input gets a `.txt` and `.srt` next to the source file.
+By default each input gets a `.txt` and `.srt` in the **current working directory** (where you ran the command). Use `-o` to write somewhere else.
 
 ```bash
-transcribe talk.mov --language en --format txt,srt,json -o ./out/
+transcribe talk.mov --language en --format txt,srt,json
+transcribe /path/to/clip.mp4 -o ./out/
 transcribe ./media --recursive
 ```
 
@@ -116,7 +127,7 @@ transcribe PATH [OPTIONS]
 
   PATH                 Media file or directory
 
-  -o, --output-dir     Write transcripts here (default: beside each source)
+  -o, --output-dir     Write transcripts here (default: current directory)
   -f, --format         txt,srt,vtt,json (default: txt,srt)
   -l, --language       Language code (e.g. en); default auto-detect
   -r, --recursive      Recurse when PATH is a directory
