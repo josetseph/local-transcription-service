@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "local-transcription-service"
+version = "0.1.0"
+description = "Local CLI to transcribe video and audio with faster-whisper"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "josetseph" }]
+keywords = ["whisper", "transcription", "speech-to-text", "faster-whisper", "cli"]
+dependencies = [
+    "click>=8.1",
+    "faster-whisper>=1.0",
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/josetseph/local-transcription-service"
+Repository = "https://github.com/josetseph/local-transcription-service"
+Issues = "https://github.com/josetseph/local-transcription-service/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+transcribe = "local_transcription_service.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/local_transcription_service"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/local_transcription_service", "config.example.yaml"]

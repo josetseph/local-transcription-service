@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.env.*
+
+# Local config (ship example only)
+config.yaml
+
+# Tooling / IDE
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Temp media from transcription
+*.whisper.wav
+.tmp-whisper/
