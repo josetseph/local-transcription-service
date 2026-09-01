@@ -1,7 +1,8 @@
-"""faster-whisper transcription engine."""
+"""MLX Whisper transcription engine (Apple Silicon GPU)."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -46,47 +47,58 @@ class TranscriptResult:
         }
 
 
-def transcribe_audio(audio_path: Path, cfg: WhisperConfig) -> TranscriptResult:
-    from faster_whisper import WhisperModel
+def transcribe_audio(
+    audio_path: Path,
+    cfg: WhisperConfig,
+    *,
+    word_timestamps: bool = False,
+    show_progress: bool = False,
+) -> TranscriptResult:
+    """Transcribe one audio file on the Apple Silicon GPU via MLX.
 
-    model_ref = resolve_model_ref(cfg)
-    model_kwargs: dict = {}
+    ``word_timestamps`` adds a per-segment DTW alignment pass; it is only worth
+    paying for when the caller actually needs word timings (the json writer).
+    ``show_progress`` renders mlx-whisper's own progress bar on stderr.
+    """
+    # Route HuggingFace downloads to the shared models root. Must be set before
+    # huggingface_hub is imported (it reads the cache path at import time), and
+    # mlx_whisper pulls it in, so this stays ahead of the import below.
     if cfg.models_root:
         cfg.models_root.mkdir(parents=True, exist_ok=True)
-        model_kwargs["download_root"] = str(cfg.models_root)
+        os.environ.setdefault("HF_HUB_CACHE", str(cfg.models_root / "huggingface"))
 
-    model = None
+    import mlx_whisper
+
     try:
-        model = WhisperModel(
-            model_ref,
-            device=cfg.device,
-            compute_type=cfg.compute_type,
-            **model_kwargs,
-        )
-        segments_iter, info = model.transcribe(
+        raw = mlx_whisper.transcribe(
             str(audio_path),
+            path_or_hf_repo=resolve_model_ref(cfg),
             language=cfg.language,
-            word_timestamps=True,
+            word_timestamps=word_timestamps,
+            # mlx-whisper shows its progress bar on verbose=False and hides it
+            # on None; True would print every segment instead.
+            verbose=False if show_progress else None,
         )
+
         segments: list[Segment] = []
-        for seg in segments_iter:
+        for seg in raw.get("segments", []):
             words = [
-                WordTiming(word=w.word.strip(), start=w.start, end=w.end)
-                for w in (seg.words or [])
-                if w.word and w.word.strip()
+                WordTiming(word=w["word"].strip(), start=w["start"], end=w["end"])
+                for w in (seg.get("words") or [])
+                if w.get("word") and w["word"].strip()
             ]
             segments.append(
                 Segment(
-                    text=seg.text.strip(),
-                    start=seg.start,
-                    end=seg.end,
+                    text=seg["text"].strip(),
+                    start=seg["start"],
+                    end=seg["end"],
                     words=words,
                 )
             )
-        full_text = " ".join(s.text for s in segments if s.text).strip()
-        detected = getattr(info, "language", None) or cfg.language
+        full_text = (raw.get("text") or "").strip()
+        if not full_text:
+            full_text = " ".join(s.text for s in segments if s.text).strip()
+        detected = raw.get("language") or cfg.language
         return TranscriptResult(text=full_text, language=detected, segments=segments)
     finally:
-        if model is not None:
-            del model
         release_accelerator_memory()

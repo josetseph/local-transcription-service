@@ -11,9 +11,7 @@ from typing import Any
 import yaml
 
 DEFAULT_MODELS_ROOT = "~/.cache/whisper-models"
-DEFAULT_MODEL_ID = "Systran/faster-whisper-large-v3"
-DEFAULT_DEVICE = "auto"
-DEFAULT_COMPUTE_TYPE = "int8"
+DEFAULT_MODEL_ID = "mlx-community/whisper-large-v3-turbo"
 
 CONFIG_FILENAMES = ("config.yaml",)
 USER_CONFIG = Path("~/.config/local-transcription-service/config.yaml")
@@ -24,8 +22,6 @@ class WhisperConfig:
     models_root: Path
     model_path: Path | None
     model_id: str
-    device: str
-    compute_type: str
     language: str | None
 
 
@@ -39,8 +35,6 @@ def _default_dict() -> dict[str, Any]:
             "models_root": DEFAULT_MODELS_ROOT,
             "model_path": "",
             "model_id": DEFAULT_MODEL_ID,
-            "device": DEFAULT_DEVICE,
-            "compute_type": DEFAULT_COMPUTE_TYPE,
             "language": None,
         }
     }
@@ -81,10 +75,6 @@ def _env_overlay() -> dict[str, Any]:
         whisper["model_path"] = value
     if value := os.environ.get("WHISPER_MODEL_ID"):
         whisper["model_id"] = value
-    if value := os.environ.get("WHISPER_DEVICE"):
-        whisper["device"] = value
-    if value := os.environ.get("WHISPER_COMPUTE_TYPE"):
-        whisper["compute_type"] = value
     if "WHISPER_LANGUAGE" in os.environ:
         lang = os.environ.get("WHISPER_LANGUAGE") or None
         whisper["language"] = lang if lang and lang.lower() not in ("", "null", "none", "auto") else None
@@ -108,8 +98,6 @@ def resolve_whisper_config(
     models_root: str | None = None,
     model_path: str | None = None,
     model_id: str | None = None,
-    device: str | None = None,
-    compute_type: str | None = None,
     language: str | None = None,
     language_explicit: bool = False,
 ) -> WhisperConfig:
@@ -119,8 +107,6 @@ def resolve_whisper_config(
     root = models_root if models_root is not None else raw.get("models_root", DEFAULT_MODELS_ROOT)
     path_raw = model_path if model_path is not None else (raw.get("model_path") or "")
     mid = model_id if model_id is not None else raw.get("model_id", DEFAULT_MODEL_ID)
-    dev = device if device is not None else raw.get("device", DEFAULT_DEVICE)
-    ctype = compute_type if compute_type is not None else raw.get("compute_type", DEFAULT_COMPUTE_TYPE)
 
     if language_explicit:
         lang = language
@@ -137,16 +123,20 @@ def resolve_whisper_config(
         models_root=_expand(root),
         model_path=local,
         model_id=str(mid),
-        device=str(dev),
-        compute_type=str(ctype),
         language=str(lang) if lang else None,
     )
 
 
+WEIGHT_FILENAMES = ("weights.safetensors", "weights.npz")
+
+
 def resolve_model_ref(cfg: WhisperConfig) -> str:
-    """Use local CTranslate2 bundle if present, else HuggingFace model id."""
-    if cfg.model_path is not None:
-        local = cfg.model_path
-        if local.is_dir() and (local / "model.bin").exists():
+    """Use the local MLX bundle if present, else the HuggingFace model id.
+
+    An MLX bundle is a directory holding ``config.json`` beside a weights file.
+    """
+    local = cfg.model_path
+    if local is not None and local.is_dir() and (local / "config.json").exists():
+        if any((local / name).exists() for name in WEIGHT_FILENAMES):
             return str(local)
     return cfg.model_id

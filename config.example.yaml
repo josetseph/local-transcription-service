@@ -5,13 +5,13 @@
 # Example (external/NAS): /Volumes/NAS/Projects/models
 
 whisper:
-  # Where faster-whisper downloads CT2 bundles when model_path is unset/invalid.
+  # HuggingFace cache root for MLX model downloads when model_path is
+  # unset/invalid (repos land in <models_root>/huggingface).
   models_root: ~/.cache/whisper-models
-  # Existing CTranslate2 folder (must contain model.bin). Leave empty to use model_id.
+  # Existing MLX model folder (config.json + weights.safetensors).
+  # Leave empty to use model_id.
   model_path: ""
-  # HuggingFace CT2 id used when model_path is missing or invalid.
-  model_id: Systran/faster-whisper-large-v3
-  device: auto
-  compute_type: int8
+  # HuggingFace MLX model id used when model_path is missing or invalid.
+  model_id: mlx-community/whisper-large-v3-turbo
   # null = auto-detect language
   language: null

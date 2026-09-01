@@ -58,22 +58,19 @@ def _parse_formats(value: str) -> set[str]:
 @click.option(
     "--model-path",
     default=None,
-    help="Path to a local CTranslate2 model folder containing model.bin.",
+    help="Path to a local MLX model folder (config.json + weights.safetensors).",
 )
 @click.option(
     "--model-id",
     default=None,
-    help="HuggingFace faster-whisper model id when model-path is unset/invalid.",
+    help="HuggingFace MLX model id when model-path is unset/invalid.",
 )
 @click.option(
-    "--device",
+    "--word-timestamps/--no-word-timestamps",
+    "word_timestamps",
     default=None,
-    help="Device: auto, cpu, or cuda.",
-)
-@click.option(
-    "--compute-type",
-    default=None,
-    help="CTranslate2 compute type (e.g. int8, float16, int8_float16).",
+    help="Per-word timings. Costs an extra alignment pass; on by default only "
+         "when the json format is requested.",
 )
 @click.option(
     "-r",
@@ -90,11 +87,10 @@ def main(
     models_root: str | None,
     model_path: str | None,
     model_id: str | None,
-    device: str | None,
-    compute_type: str | None,
+    word_timestamps: bool | None,
     recursive: bool,
 ) -> None:
-    """Transcribe video or audio with local faster-whisper.
+    """Transcribe video or audio locally on the Apple Silicon GPU (MLX).
 
     PATH may be a media file or a directory of media files.
     """
@@ -103,11 +99,11 @@ def main(
         models_root=models_root,
         model_path=model_path,
         model_id=model_id,
-        device=device,
-        compute_type=compute_type,
         language=language,
         language_explicit=language is not None,
     )
+
+    want_words = word_timestamps if word_timestamps is not None else ("json" in format_set)
 
     try:
         media_files = collect_media_files(path, recursive=recursive)
@@ -119,7 +115,7 @@ def main(
         click.echo(f"Model path: {cfg.model_path}")
     else:
         click.echo(f"Model id:   {cfg.model_id}")
-    click.echo(f"Device:     {cfg.device} ({cfg.compute_type})")
+    click.echo(f"Engine:     mlx-whisper (Apple GPU){', word timings' if want_words else ''}")
     click.echo(f"Files:      {len(media_files)}")
 
     failures = 0
@@ -128,7 +124,12 @@ def main(
         wav: Path | None = None
         try:
             wav = extract_whisper_wav(media)
-            result = transcribe_audio(wav, cfg)
+            result = transcribe_audio(
+                wav,
+                cfg,
+                word_timestamps=want_words,
+                show_progress=sys.stderr.isatty(),
+            )
             stem_dir = (output_dir if output_dir is not None else Path.cwd()).resolve()
             stem_dir.mkdir(parents=True, exist_ok=True)
             stem = stem_dir / media.stem
