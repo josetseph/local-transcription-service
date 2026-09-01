@@ -15,3 +15,15 @@ whisper:
   model_id: mlx-community/whisper-large-v3-turbo
   # null = auto-detect language
   language: null
+
+# Speaker diarization (optional; needs the "diarize" extra: pip install -e ".[diarize]")
+diarization:
+  # Gated on HuggingFace: accept the model's conditions, then set HF_TOKEN.
+  model_id: pyannote/speaker-diarization-community-1
+  # Seconds between analysis windows. pyannote defaults to 1.0; 2.0 measured
+  # ~1.9x faster at 95.7% agreement on an M3, 3.0 begins merging speakers.
+  step: 2.0
+  # Read from HF_TOKEN / HUGGINGFACE_TOKEN when left null.
+  token: null
+  # Exact speaker count when known; null lets clustering decide.
+  speakers: null

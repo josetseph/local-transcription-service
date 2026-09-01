@@ -8,7 +8,10 @@ from pathlib import Path
 import click
 
 from local_transcription_service import __version__
-from local_transcription_service.config import resolve_whisper_config
+from local_transcription_service.config import (
+    resolve_diarization_config,
+    resolve_whisper_config,
+)
 from local_transcription_service.media import collect_media_files, extract_whisper_wav
 from local_transcription_service.whisper_engine import transcribe_audio
 from local_transcription_service.writers import SUPPORTED_FORMATS, write_outputs
@@ -73,6 +76,26 @@ def _parse_formats(value: str) -> set[str]:
          "when the json format is requested.",
 )
 @click.option(
+    "--diarize",
+    is_flag=True,
+    help="Label speakers (who spoke when) with pyannote. Requires the "
+         "'diarize' extra and a HuggingFace token for the gated model.",
+)
+@click.option(
+    "--diarization-step",
+    type=float,
+    default=None,
+    help="Seconds between diarization windows. Lower is slower and more "
+         "precise; 2.0 is ~1.9x faster than pyannote's 1.0 default at 95.7% "
+         "agreement, while 3.0 starts merging speakers.",
+)
+@click.option(
+    "--speakers",
+    type=int,
+    default=None,
+    help="Exact number of speakers, when known. Improves clustering.",
+)
+@click.option(
     "-r",
     "--recursive",
     is_flag=True,
@@ -88,6 +111,9 @@ def main(
     model_path: str | None,
     model_id: str | None,
     word_timestamps: bool | None,
+    diarize: bool,
+    diarization_step: float | None,
+    speakers: int | None,
     recursive: bool,
 ) -> None:
     """Transcribe video or audio locally on the Apple Silicon GPU (MLX).
@@ -104,6 +130,13 @@ def main(
     )
 
     want_words = word_timestamps if word_timestamps is not None else ("json" in format_set)
+    if diarize:
+        want_words = True
+    diar_cfg = (
+        resolve_diarization_config(step=diarization_step, speakers=speakers)
+        if diarize
+        else None
+    )
 
     try:
         media_files = collect_media_files(path, recursive=recursive)
@@ -116,6 +149,9 @@ def main(
     else:
         click.echo(f"Model id:   {cfg.model_id}")
     click.echo(f"Engine:     mlx-whisper (Apple GPU){', word timings' if want_words else ''}")
+    if diar_cfg is not None:
+        spk = f", {diar_cfg.speakers} speakers" if diar_cfg.speakers else ""
+        click.echo(f"Diarize:    {diar_cfg.model_id} (step {diar_cfg.step}s{spk})")
     click.echo(f"Files:      {len(media_files)}")
 
     failures = 0
@@ -130,6 +166,17 @@ def main(
                 word_timestamps=want_words,
                 show_progress=sys.stderr.isatty(),
             )
+            if diar_cfg is not None:
+                from local_transcription_service.diarize import (
+                    apply_diarization,
+                    diarize_audio,
+                )
+
+                turns = diarize_audio(wav, diar_cfg, models_root=cfg.models_root)
+                result = apply_diarization(result, turns)
+                found = sorted({t.speaker for t in turns})
+                click.echo(f"  speakers: {len(found)} ({', '.join(found)})")
+
             stem_dir = (output_dir if output_dir is not None else Path.cwd()).resolve()
             stem_dir.mkdir(parents=True, exist_ok=True)
             stem = stem_dir / media.stem

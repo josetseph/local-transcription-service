@@ -132,9 +132,60 @@ transcribe PATH [OPTIONS]
   --model-path         Local MLX model directory (config.json + weights)
   --model-id           HuggingFace MLX model id
   --word-timestamps    Per-word timings (default: on only for json output)
+  --diarize            Label speakers (who spoke when)
+  --diarization-step   Seconds between diarization windows (default 2.0)
+  --speakers           Exact speaker count, when known
 ```
 
 Supported media includes common video (`mp4`, `mov`, `mkv`, `webm`, …) and audio (`wav`, `mp3`, `m4a`, `ogg`, `flac`, …). Non-WAV inputs are converted with ffmpeg to 16 kHz mono WAV temporarily, then removed.
+
+## Speaker diarization
+
+Whisper transcribes words; it has no idea *who* is speaking. `--diarize` adds a
+second pass ([pyannote.audio](https://github.com/pyannote/pyannote-audio)) that
+labels speakers, then attributes each transcribed word to whichever speaker was
+talking at that moment.
+
+```bash
+pip install -e ".[diarize]"
+```
+
+The model is gated: accept the conditions on
+[pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1),
+create a read token, then either `export HF_TOKEN=...` or set `diarization.token`
+in your config. Weights cache under `<models_root>/huggingface` like everything else.
+
+```bash
+transcribe meeting.m4a --diarize
+transcribe meeting.m4a --diarize --speakers 4      # when you know the headcount
+```
+
+Output gains speaker labels: `SPEAKER_01: …` lines in txt, speaker-prefixed cues
+in srt/vtt, and a `speaker` field per segment in json. Diarization attributes
+individual words, so `--word-timestamps` turns on automatically.
+
+### Speed, and the `--diarization-step` trade
+
+Diarization runs on **CPU** — pyannote is a PyTorch model with no working Metal
+path, so unlike the Whisper pass it cannot use the GPU. It is the slower half of
+the pipeline. Roughly 95% of its time goes to one speaker-embedding pass per
+analysis window, so cost scales with the number of windows — which is what
+`--diarization-step` controls.
+
+Measured on an M3 over a 10-minute meeting recording:
+
+| step | speed | speakers found | agreement with pyannote's default |
+|------|-------|----------------|-----------------------------------|
+| 1.0 (pyannote default) | 1.83x realtime | 4 | — |
+| **2.0 (our default)** | **3.42x realtime** | 4 | **95.7%** |
+| 3.0 | 5.17x realtime | **3** — merges two people | 48.1% |
+
+2.0 nearly halves the runtime while changing the result less than switching
+pyannote models does. 3.0 is a cliff, not a further trade. Drop to `1.0` if you
+would rather have pyannote's stock behaviour.
+
+For an 81-minute recording that works out to roughly 10 minutes of transcription
+plus 24 minutes of diarization.
 
 ## Environment variables
 
@@ -144,6 +195,7 @@ Supported media includes common video (`mp4`, `mov`, `mkv`, `webm`, …) and aud
 | `WHISPER_MODEL_PATH` | Local MLX folder (`config.json` + weights) |
 | `WHISPER_MODEL_ID` | HuggingFace MLX model id fallback |
 | `WHISPER_LANGUAGE` | Language code, or empty/`auto` for detect |
+| `HF_TOKEN` | HuggingFace token for the gated diarization model |
 
 ## Troubleshooting
 

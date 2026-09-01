@@ -30,10 +30,33 @@ def _ts_vtt(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{ms:03d}"
 
 
+def _cue_text(seg: Segment) -> str:
+    text = seg.text.strip()
+    return f"{seg.speaker}: {text}" if seg.speaker and text else text
+
+
+def format_txt(segments: list[Segment], fallback: str) -> str:
+    """Speaker-labelled lines when diarized, else the plain transcript."""
+    if not any(seg.speaker for seg in segments):
+        return fallback + ("\n" if fallback else "")
+    lines: list[str] = []
+    last: str | None = None
+    for seg in segments:
+        text = seg.text.strip()
+        if not text:
+            continue
+        if seg.speaker == last and lines:      # same speaker continuing
+            lines[-1] += " " + text
+        else:
+            lines.append(f"{seg.speaker}: {text}" if seg.speaker else text)
+            last = seg.speaker
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 def format_srt(segments: list[Segment]) -> str:
     blocks: list[str] = []
     for i, seg in enumerate(segments, start=1):
-        text = seg.text.strip()
+        text = _cue_text(seg)
         if not text:
             continue
         blocks.append(f"{i}\n{_ts_srt(seg.start)} --> {_ts_srt(seg.end)}\n{text}")
@@ -43,7 +66,7 @@ def format_srt(segments: list[Segment]) -> str:
 def format_vtt(segments: list[Segment]) -> str:
     lines = ["WEBVTT", ""]
     for seg in segments:
-        text = seg.text.strip()
+        text = _cue_text(seg)
         if not text:
             continue
         lines.append(f"{_ts_vtt(seg.start)} --> {_ts_vtt(seg.end)}")
@@ -66,7 +89,7 @@ def write_outputs(
 
     if "txt" in formats:
         path = output_stem.with_suffix(".txt")
-        path.write_text(result.text + ("\n" if result.text else ""), encoding="utf-8")
+        path.write_text(format_txt(result.segments, result.text), encoding="utf-8")
         written.append(path)
 
     if "srt" in formats:

@@ -23,6 +23,7 @@ class Segment:
     start: float
     end: float
     words: list[WordTiming] = field(default_factory=list)
+    speaker: str | None = None
 
 
 @dataclass
@@ -40,11 +41,17 @@ class TranscriptResult:
                     "text": s.text,
                     "start": s.start,
                     "end": s.end,
+                    "speaker": s.speaker,
                     "words": [asdict(w) for w in s.words],
                 }
                 for s in self.segments
             ],
         }
+
+
+def join_words(words: list[WordTiming]) -> str:
+    """Rebuild text from stripped word timings (punctuation stays attached)."""
+    return " ".join(w.word for w in words if w.word).strip()
 
 
 def transcribe_audio(

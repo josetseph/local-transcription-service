@@ -12,6 +12,8 @@ import yaml
 
 DEFAULT_MODELS_ROOT = "~/.cache/whisper-models"
 DEFAULT_MODEL_ID = "mlx-community/whisper-large-v3-turbo"
+DEFAULT_DIARIZATION_MODEL_ID = "pyannote/speaker-diarization-community-1"
+DEFAULT_DIARIZATION_STEP = 2.0
 
 CONFIG_FILENAMES = ("config.yaml",)
 USER_CONFIG = Path("~/.config/local-transcription-service/config.yaml")
@@ -36,7 +38,13 @@ def _default_dict() -> dict[str, Any]:
             "model_path": "",
             "model_id": DEFAULT_MODEL_ID,
             "language": None,
-        }
+        },
+        "diarization": {
+            "model_id": DEFAULT_DIARIZATION_MODEL_ID,
+            "step": DEFAULT_DIARIZATION_STEP,
+            "token": None,
+            "speakers": None,
+        },
     }
 
 
@@ -140,3 +148,30 @@ def resolve_model_ref(cfg: WhisperConfig) -> str:
         if any((local / name).exists() for name in WEIGHT_FILENAMES):
             return str(local)
     return cfg.model_id
+
+
+def resolve_diarization_config(
+    *,
+    model_id: str | None = None,
+    step: float | None = None,
+    speakers: int | None = None,
+):
+    """Build a DiarizationConfig. CLI kwargs override file/env when provided."""
+    from local_transcription_service.diarize import DiarizationConfig
+
+    raw = load_raw_config().get("diarization") or {}
+
+    token = (
+        raw.get("token")
+        or os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGINGFACE_TOKEN")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    )
+    spk = speakers if speakers is not None else raw.get("speakers")
+
+    return DiarizationConfig(
+        model_id=model_id or raw.get("model_id") or DEFAULT_DIARIZATION_MODEL_ID,
+        step=float(step if step is not None else raw.get("step", DEFAULT_DIARIZATION_STEP)),
+        token=str(token) if token else None,
+        speakers=int(spk) if spk else None,
+    )
