@@ -9,7 +9,11 @@ import click
 
 from local_transcription_service import __version__
 from local_transcription_service.config import (
+    ENGINE_MLX,
+    ENGINES,
     resolve_diarization_config,
+    resolve_engine,
+    resolve_model_ref,
     resolve_whisper_config,
 )
 from local_transcription_service.media import collect_media_files, extract_whisper_wav
@@ -69,6 +73,25 @@ def _parse_formats(value: str) -> set[str]:
     help="HuggingFace MLX model id when model-path is unset/invalid.",
 )
 @click.option(
+    "--engine",
+    type=click.Choice(["auto", *ENGINES]),
+    default=None,
+    help="Backend: mlx (Apple Silicon GPU) or faster-whisper (CPU/CUDA, all "
+         "platforms). Default auto: follows the local model's format, else the "
+         "platform.",
+)
+@click.option(
+    "--device",
+    default=None,
+    help="faster-whisper only: auto, cpu, or cuda. MLX always uses the Apple GPU.",
+)
+@click.option(
+    "--compute-type",
+    default=None,
+    help="faster-whisper only: CTranslate2 compute type (int8, float16, "
+         "int8_float16).",
+)
+@click.option(
     "--word-timestamps/--no-word-timestamps",
     "word_timestamps",
     default=None,
@@ -110,6 +133,9 @@ def main(
     models_root: str | None,
     model_path: str | None,
     model_id: str | None,
+    engine: str | None,
+    device: str | None,
+    compute_type: str | None,
     word_timestamps: bool | None,
     diarize: bool,
     diarization_step: float | None,
@@ -127,6 +153,9 @@ def main(
         model_id=model_id,
         language=language,
         language_explicit=language is not None,
+        engine=engine,
+        device=device,
+        compute_type=compute_type,
     )
 
     want_words = word_timestamps if word_timestamps is not None else ("json" in format_set)
@@ -139,16 +168,36 @@ def main(
     )
 
     try:
+        selected_engine = resolve_engine(cfg)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    model_ref, model_warning = resolve_model_ref(cfg, selected_engine)
+
+    from local_transcription_service.whisper_engine import EngineUnavailable, _require
+
+    try:
+        _require("mlx_whisper" if selected_engine == ENGINE_MLX else "faster_whisper",
+                 selected_engine)
+    except EngineUnavailable as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    try:
         media_files = collect_media_files(path, recursive=recursive)
     except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
     click.echo(f"Model root: {cfg.models_root}")
-    if cfg.model_path:
-        click.echo(f"Model path: {cfg.model_path}")
+    click.echo(f"Model:      {model_ref}")
+    if model_warning:
+        # Never fall back silently: an ignored model_path otherwise shows up as
+        # an unexplained multi-gigabyte download.
+        click.echo(f"  warning:  {model_warning} — falling back to {model_ref}", err=True)
+    if selected_engine == ENGINE_MLX:
+        detail = "mlx-whisper (Apple GPU)"
     else:
-        click.echo(f"Model id:   {cfg.model_id}")
-    click.echo(f"Engine:     mlx-whisper (Apple GPU){', word timings' if want_words else ''}")
+        detail = f"faster-whisper ({cfg.device}, {cfg.compute_type})"
+    click.echo(f"Engine:     {detail}{', word timings' if want_words else ''}")
     if diar_cfg is not None:
         spk = f", {diar_cfg.speakers} speakers" if diar_cfg.speakers else ""
         click.echo(f"Diarize:    {diar_cfg.model_id} (step {diar_cfg.step}s{spk})")

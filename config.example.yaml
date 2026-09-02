@@ -5,14 +5,23 @@
 # Example (external/NAS): /Volumes/NAS/Projects/models
 
 whisper:
+  # auto | mlx | faster-whisper. auto follows the local model's format when
+  # model_path is set, otherwise the platform (MLX on Apple Silicon).
+  engine: auto
   # HuggingFace cache root for MLX model downloads when model_path is
   # unset/invalid (repos land in <models_root>/huggingface).
   models_root: ~/.cache/whisper-models
-  # Existing MLX model folder (config.json + weights.safetensors).
+  # Existing model folder: MLX (config.json + weights) or CTranslate2
+  # (model.bin). The format selects the engine when engine is auto.
   # Leave empty to use model_id.
   model_path: ""
-  # HuggingFace MLX model id used when model_path is missing or invalid.
-  model_id: mlx-community/whisper-large-v3-turbo
+  # Model id used when model_path is missing or invalid. null picks the default
+  # for the selected engine: mlx-community/whisper-large-v3-mlx for mlx,
+  # Systran/faster-whisper-large-v3 for faster-whisper.
+  model_id: null
+  # faster-whisper only; MLX always uses the Apple GPU.
+  device: auto
+  compute_type: int8
   # null = auto-detect language
   language: null
 

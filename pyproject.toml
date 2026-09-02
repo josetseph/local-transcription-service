@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "local-transcription-service"
 version = "0.1.0"
-description = "Local CLI to transcribe video and audio on the Apple Silicon GPU via MLX"
+description = "Local CLI to transcribe video and audio: MLX on Apple Silicon, faster-whisper elsewhere"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -13,8 +13,11 @@ authors = [{ name = "josetseph" }]
 keywords = ["whisper", "transcription", "speech-to-text", "mlx", "apple-silicon", "cli"]
 dependencies = [
     "click>=8.1",
-    "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "pyyaml>=6.0",
+    # One engine per platform, so a bare install works everywhere: MLX uses the
+    # GPU on Apple Silicon, faster-whisper covers Linux, Windows and Intel Macs.
+    "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "faster-whisper>=1.0; not (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 [project.urls]
@@ -25,6 +28,9 @@ Issues = "https://github.com/josetseph/local-transcription-service/issues"
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.5"]
 diarize = ["pyannote.audio>=4.0"]
+# Force an engine regardless of platform (e.g. faster-whisper on Apple Silicon).
+mlx = ["mlx-whisper>=0.4"]
+faster-whisper = ["faster-whisper>=1.0"]
 
 [project.scripts]
 transcribe = "local_transcription_service.cli:main"
