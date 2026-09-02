@@ -36,14 +36,35 @@ class DiarizationConfig:
     max_speakers: int | None = None
 
 
-def diarize_audio(audio_path: Path, cfg: DiarizationConfig, models_root: Path | None = None) -> list[Turn]:
-    """Return speaker turns for one audio file, sorted by start time."""
+def diarize_audio(
+    audio_path: Path,
+    cfg: DiarizationConfig,
+    models_root: Path | None = None,
+    *,
+    show_progress: bool = False,
+) -> list[Turn]:
+    """Return speaker turns for one audio file, sorted by start time.
+
+    ``show_progress`` renders pyannote's own per-stage progress bars. Without
+    them a long diarization pass is entirely silent, which is indistinguishable
+    from a hang — it is the slower half of the pipeline.
+    """
     # Same cache the Whisper side uses; must precede the huggingface_hub import.
     if models_root is not None:
         os.environ.setdefault("HF_HUB_CACHE", str(models_root / "huggingface"))
 
+    import warnings
+
     import torch
     from pyannote.audio import Pipeline
+
+    # Emitted per chunk from pooling when a speaker is active for a single
+    # frame; harmless, but it buries the progress bar in repeated noise.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"std\(\): degrees of freedom is <= 0",
+        category=UserWarning,
+    )
 
     pipeline = None
     try:
@@ -71,7 +92,13 @@ def diarize_audio(audio_path: Path, cfg: DiarizationConfig, models_root: Path | 
                 kwargs["min_speakers"] = cfg.min_speakers
             if cfg.max_speakers:
                 kwargs["max_speakers"] = cfg.max_speakers
-        output = pipeline(str(audio_path), **kwargs)
+        if show_progress:
+            from pyannote.audio.pipelines.utils.hook import ProgressHook
+
+            with ProgressHook() as hook:
+                output = pipeline(str(audio_path), hook=hook, **kwargs)
+        else:
+            output = pipeline(str(audio_path), **kwargs)
 
         # pyannote 4.x returns DiarizeOutput; earlier versions a bare Annotation.
         annotation = getattr(output, "speaker_diarization", output)

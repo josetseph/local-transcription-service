@@ -258,7 +258,12 @@ def main(
                     diarize_audio,
                 )
 
-                turns = diarize_audio(wav, diar_cfg, models_root=cfg.models_root)
+                turns = diarize_audio(
+                    wav,
+                    diar_cfg,
+                    models_root=cfg.models_root,
+                    show_progress=sys.stderr.isatty(),
+                )
                 result = apply_diarization(result, turns)
                 found = sorted({t.speaker for t in turns})
                 click.echo(f"  speakers: {len(found)} ({', '.join(found)})")
