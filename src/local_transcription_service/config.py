@@ -300,6 +300,8 @@ def resolve_diarization_config(
     model_id: str | None = None,
     step: float | None = None,
     speakers: int | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
 ):
     """Build a DiarizationConfig. CLI kwargs override file/env when provided."""
     from local_transcription_service.diarize import DiarizationConfig
@@ -313,10 +315,14 @@ def resolve_diarization_config(
         or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     )
     spk = speakers if speakers is not None else raw.get("speakers")
+    lo = min_speakers if min_speakers is not None else raw.get("min_speakers")
+    hi = max_speakers if max_speakers is not None else raw.get("max_speakers")
 
     return DiarizationConfig(
         model_id=model_id or raw.get("model_id") or DEFAULT_DIARIZATION_MODEL_ID,
         step=float(step if step is not None else raw.get("step", DEFAULT_DIARIZATION_STEP)),
         token=str(token) if token else None,
         speakers=int(spk) if spk else None,
+        min_speakers=int(lo) if lo else None,
+        max_speakers=int(hi) if hi else None,
     )

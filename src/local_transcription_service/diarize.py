@@ -32,6 +32,8 @@ class DiarizationConfig:
     step: float
     token: str | None
     speakers: int | None
+    min_speakers: int | None = None
+    max_speakers: int | None = None
 
 
 def diarize_audio(audio_path: Path, cfg: DiarizationConfig, models_root: Path | None = None) -> list[Turn]:
@@ -59,7 +61,16 @@ def diarize_audio(audio_path: Path, cfg: DiarizationConfig, models_root: Path | 
         if cfg.step:
             pipeline._segmentation.step = cfg.step
 
-        kwargs = {"num_speakers": cfg.speakers} if cfg.speakers else {}
+        # An exact count pins clustering; a min/max pair bounds the search when
+        # the count is unknown. Unconstrained, clustering decides on its own.
+        kwargs: dict = {}
+        if cfg.speakers:
+            kwargs["num_speakers"] = cfg.speakers
+        else:
+            if cfg.min_speakers:
+                kwargs["min_speakers"] = cfg.min_speakers
+            if cfg.max_speakers:
+                kwargs["max_speakers"] = cfg.max_speakers
         output = pipeline(str(audio_path), **kwargs)
 
         # pyannote 4.x returns DiarizeOutput; earlier versions a bare Annotation.

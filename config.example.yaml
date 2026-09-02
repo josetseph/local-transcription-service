@@ -36,3 +36,6 @@ diarization:
   token: null
   # Exact speaker count when known; null lets clustering decide.
   speakers: null
+  # Bounds for the search when the exact count is unknown (null = unbounded).
+  min_speakers: null
+  max_speakers: null

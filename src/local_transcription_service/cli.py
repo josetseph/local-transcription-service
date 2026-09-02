@@ -119,6 +119,19 @@ def _parse_formats(value: str) -> set[str]:
     help="Exact number of speakers, when known. Improves clustering.",
 )
 @click.option(
+    "--min-speakers",
+    type=int,
+    default=None,
+    help="Lower bound on the speaker count when the exact number is unknown.",
+)
+@click.option(
+    "--max-speakers",
+    type=int,
+    default=None,
+    help="Upper bound on the speaker count. Pair with --min-speakers to bound "
+         "the search (e.g. 8-12) instead of guessing an exact number.",
+)
+@click.option(
     "-r",
     "--recursive",
     is_flag=True,
@@ -140,6 +153,8 @@ def main(
     diarize: bool,
     diarization_step: float | None,
     speakers: int | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
     recursive: bool,
 ) -> None:
     """Transcribe video or audio locally on the Apple Silicon GPU (MLX).
@@ -161,8 +176,23 @@ def main(
     want_words = word_timestamps if word_timestamps is not None else ("json" in format_set)
     if diarize:
         want_words = True
+    if speakers is not None and (min_speakers is not None or max_speakers is not None):
+        raise click.UsageError(
+            "--speakers pins an exact count; use --min-speakers/--max-speakers instead, not both."
+        )
+    if (
+        min_speakers is not None
+        and max_speakers is not None
+        and min_speakers > max_speakers
+    ):
+        raise click.UsageError("--min-speakers cannot exceed --max-speakers.")
     diar_cfg = (
-        resolve_diarization_config(step=diarization_step, speakers=speakers)
+        resolve_diarization_config(
+            step=diarization_step,
+            speakers=speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
         if diarize
         else None
     )
@@ -199,7 +229,14 @@ def main(
         detail = f"faster-whisper ({cfg.device}, {cfg.compute_type})"
     click.echo(f"Engine:     {detail}{', word timings' if want_words else ''}")
     if diar_cfg is not None:
-        spk = f", {diar_cfg.speakers} speakers" if diar_cfg.speakers else ""
+        if diar_cfg.speakers:
+            spk = f", exactly {diar_cfg.speakers} speakers"
+        elif diar_cfg.min_speakers or diar_cfg.max_speakers:
+            lo = diar_cfg.min_speakers or "?"
+            hi = diar_cfg.max_speakers or "?"
+            spk = f", {lo}-{hi} speakers"
+        else:
+            spk = ", speaker count auto-detected"
         click.echo(f"Diarize:    {diar_cfg.model_id} (step {diar_cfg.step}s{spk})")
     click.echo(f"Files:      {len(media_files)}")
 

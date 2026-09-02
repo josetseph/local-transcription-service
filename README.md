@@ -188,6 +188,8 @@ transcribe PATH [OPTIONS]
   --diarize            Label speakers (who spoke when)
   --diarization-step   Seconds between diarization windows (default 2.0)
   --speakers           Exact speaker count, when known
+  --min-speakers       Lower bound when the count is unknown
+  --max-speakers       Upper bound when the count is unknown
 ```
 
 Supported media includes common video (`mp4`, `mov`, `mkv`, `webm`, …) and audio (`wav`, `mp3`, `m4a`, `ogg`, `flac`, …). Non-WAV inputs are converted with ffmpeg to 16 kHz mono WAV temporarily, then removed.
@@ -209,9 +211,17 @@ create a read token, then either `export HF_TOKEN=...` or set `diarization.token
 in your config. Weights cache under `<models_root>/huggingface` like everything else.
 
 ```bash
-transcribe meeting.m4a --diarize
-transcribe meeting.m4a --diarize --speakers 4      # when you know the headcount
+transcribe meeting.m4a --diarize                             # count auto-detected
+transcribe meeting.m4a --diarize --speakers 4                # exact headcount
+transcribe meeting.m4a --diarize --min-speakers 8 --max-speakers 12
 ```
+
+The speaker count is **detected automatically** — `--speakers` is optional and
+constrains clustering only when you already know the answer. When you have a
+rough idea but not an exact number, `--min-speakers` / `--max-speakers` bound the
+search, which is safer than guessing an exact count: an exact `--speakers` that
+is wrong forces the wrong number of clusters, splitting one person in two or
+merging two people into one.
 
 Output gains speaker labels: `SPEAKER_01: …` lines in txt, speaker-prefixed cues
 in srt/vtt, and a `speaker` field per segment in json. Diarization attributes
