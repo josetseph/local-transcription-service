@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml>=6.0",
     # One engine per platform, so a bare install works everywhere: MLX uses the
     # GPU on Apple Silicon, faster-whisper covers Linux, Windows and Intel Macs.
+    "mlx-qwen3-asr>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "faster-whisper>=1.0; not (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
@@ -30,6 +31,7 @@ dev = ["pytest>=8.0", "ruff>=0.5"]
 diarize = ["pyannote.audio>=4.0"]
 # Force an engine regardless of platform (e.g. faster-whisper on Apple Silicon).
 mlx = ["mlx-whisper>=0.4"]
+qwen = ["mlx-qwen3-asr>=0.4"]
 faster-whisper = ["faster-whisper>=1.0"]
 
 [project.scripts]

@@ -111,8 +111,23 @@ Two backends, selected automatically:
 
 | engine | runs on | platforms |
 |--------|---------|-----------|
+| `qwen` | Apple Silicon **GPU** | macOS on M1 and later |
 | `mlx` | Apple Silicon **GPU** | macOS on M1 and later |
 | `faster-whisper` | **CPU or CUDA** | macOS, Linux, Windows |
+
+### Which model
+
+Measured on an M3 (see `tools/`):
+
+| task | model | why |
+|------|-------|-----|
+| recordings — meetings, lectures, interviews | **`qwen3-asr-1.7b`** (default) | 28.1% WER vs whisper's 36.1% on distant-mic meeting audio |
+| live dictation | `qwen3-asr-0.6b` | 0.0% WER at 0.36s per sentence; 4x snappier than whisper |
+| clean, close-mic batch | any | 1.7B and whisper both hit 0.0% |
+
+Whisper stays available as `--engine mlx` but wins none of these. It is trained
+on 30-second windows, so it degrades on the short utterances dictation produces
+— in the live test it mangled two of six while both Qwen models were perfect.
 
 `pip install` pulls the one that fits your machine, so a plain install works
 everywhere. `--engine auto` (the default) resolves in this order:

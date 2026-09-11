@@ -14,12 +14,14 @@ DEFAULT_MODELS_ROOT = "~/.cache/whisper-models"
 # Per-engine defaults: an MLX repo id handed to faster-whisper (or vice versa)
 # fails confusingly, so the default follows whichever engine is selected.
 DEFAULT_MODEL_ID_MLX = "mlx-community/whisper-large-v3-mlx"
+DEFAULT_MODEL_ID_QWEN = "Qwen/Qwen3-ASR-1.7B"
 DEFAULT_MODEL_ID_FASTER_WHISPER = "Systran/faster-whisper-large-v3"
 DEFAULT_MODEL_ID = DEFAULT_MODEL_ID_MLX  # back-compat alias
 
 ENGINE_MLX = "mlx"
 ENGINE_FASTER_WHISPER = "faster-whisper"
-ENGINES = (ENGINE_MLX, ENGINE_FASTER_WHISPER)
+ENGINE_QWEN = "qwen"
+ENGINES = (ENGINE_QWEN, ENGINE_MLX, ENGINE_FASTER_WHISPER)
 DEFAULT_ENGINE = "auto"
 DEFAULT_DEVICE = "auto"
 DEFAULT_COMPUTE_TYPE = "int8"
@@ -42,6 +44,8 @@ class WhisperConfig:
     engine: str = DEFAULT_ENGINE
     device: str = DEFAULT_DEVICE
     compute_type: str = DEFAULT_COMPUTE_TYPE
+    # Domain terms biasing recognition (qwen only; other engines ignore it).
+    context: str = ""
 
 
 def _expand(path: str | Path) -> Path:
@@ -57,6 +61,7 @@ def _default_dict() -> dict[str, Any]:
             "model_id": None,
             "language": None,
             "engine": DEFAULT_ENGINE,
+            "context": "",
             "device": DEFAULT_DEVICE,
             "compute_type": DEFAULT_COMPUTE_TYPE,
         },
@@ -138,6 +143,7 @@ def resolve_whisper_config(
     engine: str | None = None,
     device: str | None = None,
     compute_type: str | None = None,
+    context: str | None = None,
 ) -> WhisperConfig:
     """Build final WhisperConfig. CLI kwargs override file/env when provided."""
     raw = load_raw_config()["whisper"]
@@ -148,6 +154,7 @@ def resolve_whisper_config(
     eng = engine if engine is not None else raw.get("engine", DEFAULT_ENGINE)
     dev = device if device is not None else raw.get("device", DEFAULT_DEVICE)
     ctype = compute_type if compute_type is not None else raw.get("compute_type", DEFAULT_COMPUTE_TYPE)
+    ctx = context if context is not None else (raw.get("context") or "")
 
     if language_explicit:
         lang = language
@@ -168,6 +175,7 @@ def resolve_whisper_config(
         engine=str(eng),
         device=str(dev),
         compute_type=str(ctype),
+        context=str(ctx),
     )
 
 
@@ -178,6 +186,22 @@ def is_mlx_bundle(path: Path) -> bool:
         and (path / "config.json").exists()
         and any((path / name).exists() for name in MLX_WEIGHTS)
     )
+
+
+def is_qwen_bundle(path: Path) -> bool:
+    """A Qwen3-ASR folder: HF layout with a Qwen3-ASR architecture in config.json."""
+    cfg = path / "config.json"
+    if not (path.is_dir() and cfg.exists()):
+        return False
+    if not any(path.glob("*.safetensors")):
+        return False
+    try:
+        import json
+
+        text = json.dumps(json.loads(cfg.read_text(encoding="utf-8"))).lower()
+    except (OSError, ValueError):
+        return False
+    return "qwen3asr" in text.replace("_", "").replace("-", "")
 
 
 def is_ct2_bundle(path: Path) -> bool:
@@ -216,19 +240,22 @@ def resolve_engine(cfg: WhisperConfig) -> str:
         return cfg.engine
 
     available = {
+        ENGINE_QWEN: _installed("mlx_qwen3_asr"),
         ENGINE_MLX: _installed("mlx_whisper"),
         ENGINE_FASTER_WHISPER: _installed("faster_whisper"),
     }
 
     # A local model folder states unambiguously which runtime can read it.
     if cfg.model_path is not None:
+        if is_qwen_bundle(cfg.model_path) and available[ENGINE_QWEN]:
+            return ENGINE_QWEN
         if is_mlx_bundle(cfg.model_path) and available[ENGINE_MLX]:
             return ENGINE_MLX
         if is_ct2_bundle(cfg.model_path) and available[ENGINE_FASTER_WHISPER]:
             return ENGINE_FASTER_WHISPER
 
     preference = (
-        (ENGINE_MLX, ENGINE_FASTER_WHISPER)
+        (ENGINE_QWEN, ENGINE_MLX, ENGINE_FASTER_WHISPER)
         if is_apple_silicon()
         else (ENGINE_FASTER_WHISPER, ENGINE_MLX)
     )
@@ -241,11 +268,10 @@ def resolve_engine(cfg: WhisperConfig) -> str:
 
 
 def default_model_id(engine: str) -> str:
-    return (
-        DEFAULT_MODEL_ID_MLX
-        if engine == ENGINE_MLX
-        else DEFAULT_MODEL_ID_FASTER_WHISPER
-    )
+    return {
+        ENGINE_QWEN: DEFAULT_MODEL_ID_QWEN,
+        ENGINE_MLX: DEFAULT_MODEL_ID_MLX,
+    }.get(engine, DEFAULT_MODEL_ID_FASTER_WHISPER)
 
 
 def resolve_model_ref(cfg: WhisperConfig, engine: str | None = None) -> tuple[str, str | None]:
@@ -256,8 +282,12 @@ def resolve_model_ref(cfg: WhisperConfig, engine: str | None = None) -> tuple[st
     surprise multi-gigabyte fetch of a model the engine still cannot read.
     """
     engine = engine or resolve_engine(cfg)
+    matches = {
+        ENGINE_QWEN: is_qwen_bundle,
+        ENGINE_MLX: is_mlx_bundle,
+    }.get(engine, is_ct2_bundle)
+    kind = {ENGINE_QWEN: "Qwen3-ASR", ENGINE_MLX: "MLX"}.get(engine, "CTranslate2")
     wants_mlx = engine == ENGINE_MLX
-    matches = is_mlx_bundle if wants_mlx else is_ct2_bundle
 
     warning = None
     if cfg.model_path is not None:
@@ -266,18 +296,20 @@ def resolve_model_ref(cfg: WhisperConfig, engine: str | None = None) -> tuple[st
         if not cfg.model_path.exists():
             warning = f"model_path {cfg.model_path} does not exist"
         else:
-            other = is_ct2_bundle(cfg.model_path) if wants_mlx else is_mlx_bundle(cfg.model_path)
-            looks = (
-                " (it looks like a "
-                + ("CTranslate2" if wants_mlx else "MLX")
-                + " folder)"
-                if other
-                else ""
+            found = next(
+                (
+                    name
+                    for name, test in (
+                        ("Qwen3-ASR", is_qwen_bundle),
+                        ("MLX", is_mlx_bundle),
+                        ("CTranslate2", is_ct2_bundle),
+                    )
+                    if name != kind and test(cfg.model_path)
+                ),
+                None,
             )
-            warning = (
-                f"model_path {cfg.model_path} is not a {'MLX' if wants_mlx else 'CTranslate2'} "
-                f"model{looks}"
-            )
+            looks = f" (it looks like a {found} folder)" if found else ""
+            warning = f"model_path {cfg.model_path} is not a {kind} model{looks}"
 
     if not cfg.model_id:
         return default_model_id(engine), warning
@@ -287,6 +319,8 @@ def resolve_model_ref(cfg: WhisperConfig, engine: str | None = None) -> tuple[st
     lowered = cfg.model_id.lower()
     looks_mlx = "mlx" in lowered
     looks_ct2 = "faster-whisper" in lowered or lowered.startswith("systran/")
+    if engine == ENGINE_QWEN:
+        return cfg.model_id, warning
     if wants_mlx and looks_ct2 and not looks_mlx:
         warning = warning or f"model_id {cfg.model_id} looks like a CTranslate2 model, not MLX"
     elif not wants_mlx and looks_mlx:
@@ -297,6 +331,7 @@ def resolve_model_ref(cfg: WhisperConfig, engine: str | None = None) -> tuple[st
 
 def resolve_diarization_config(
     *,
+    model_path: str | None = None,
     model_id: str | None = None,
     step: float | None = None,
     speakers: int | None = None,
@@ -318,8 +353,19 @@ def resolve_diarization_config(
     lo = min_speakers if min_speakers is not None else raw.get("min_speakers")
     hi = max_speakers if max_speakers is not None else raw.get("max_speakers")
 
+    # A local pipeline folder wins: it needs no HF cache and no token, because
+    # config.yaml resolves its $model/ sub-models relative to its own directory.
+    local = model_path if model_path is not None else raw.get("model_path")
+    ref = None
+    if local and str(local).strip():
+        candidate = _expand(local)
+        if candidate.is_dir() and (candidate / "config.yaml").exists():
+            candidate = candidate / "config.yaml"
+        if candidate.exists():
+            ref = str(candidate)
+
     return DiarizationConfig(
-        model_id=model_id or raw.get("model_id") or DEFAULT_DIARIZATION_MODEL_ID,
+        model_id=ref or model_id or raw.get("model_id") or DEFAULT_DIARIZATION_MODEL_ID,
         step=float(step if step is not None else raw.get("step", DEFAULT_DIARIZATION_STEP)),
         token=str(token) if token else None,
         speakers=int(spk) if spk else None,

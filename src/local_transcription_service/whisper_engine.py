@@ -8,6 +8,7 @@ from pathlib import Path
 
 from local_transcription_service.config import (
     ENGINE_MLX,
+    ENGINE_QWEN,
     WhisperConfig,
     resolve_engine,
     resolve_model_ref,
@@ -72,6 +73,13 @@ def _require(module: str, engine: str) -> None:
         available = False
     if available:
         return
+    if engine == ENGINE_QWEN:
+        raise EngineUnavailable(
+            "The 'qwen' engine needs mlx-qwen3-asr, which runs only on Apple Silicon "
+            "(M1 or later).\n"
+            "  On an Apple Silicon Mac:  pip install mlx-qwen3-asr\n"
+            "  On any other machine:     use --engine faster-whisper"
+        )
     if engine == ENGINE_MLX:
         raise EngineUnavailable(
             "The 'mlx' engine needs mlx-whisper, which runs only on Apple Silicon "
@@ -107,11 +115,121 @@ def transcribe_audio(
         cfg.models_root.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault("HF_HUB_CACHE", str(cfg.models_root / "huggingface"))
 
+    if engine == ENGINE_QWEN:
+        _require("mlx_qwen3_asr", engine)
+        return _transcribe_qwen(audio_path, cfg, model_ref, word_timestamps, show_progress)
     if engine == ENGINE_MLX:
         _require("mlx_whisper", engine)
         return _transcribe_mlx(audio_path, cfg, model_ref, word_timestamps, show_progress)
     _require("faster_whisper", engine)
     return _transcribe_faster_whisper(audio_path, cfg, model_ref, word_timestamps)
+
+
+def _transcribe_qwen(
+    audio_path: Path,
+    cfg: WhisperConfig,
+    model_ref: str,
+    word_timestamps: bool,
+    show_progress: bool,
+) -> TranscriptResult:
+    import mlx_qwen3_asr
+
+    try:
+        raw = mlx_qwen3_asr.transcribe(
+            str(audio_path),
+            model=model_ref,
+            # Qwen wants a language name ("English"), not an ISO code.
+            language=_qwen_language(cfg.language),
+            return_timestamps=word_timestamps,
+            context=cfg.context or "",
+            verbose=show_progress,
+        )
+
+        # With return_timestamps the model emits one entry per word, not
+        # segments containing words. Regroup into sentence-length cues so srt
+        # output is readable, keeping the word timings diarization needs.
+        entries = [_as_dict(x) for x in (getattr(raw, "segments", None) or [])]
+        words = [
+            WordTiming(
+                word=str(e.get("text") or "").strip(),
+                start=float(e.get("start") or 0.0),
+                end=float(e.get("end") or 0.0),
+            )
+            for e in entries
+            if str(e.get("text") or "").strip()
+        ]
+        # The aligner strips punctuation from each word, but raw text keeps it
+        # and the two are token-for-token identical. Restore it, so cues break
+        # on sentences and the transcript stays readable.
+        tokens = (getattr(raw, "text", "") or "").split()
+        if len(tokens) == len(words):
+            for word, token in zip(words, tokens):
+                word.word = token
+        segments = _group_words(words)
+        full_text = (getattr(raw, "text", "") or "").strip()
+        if not segments and full_text:
+            # No timestamps requested: one segment covering the whole file.
+            segments = [Segment(text=full_text, start=0.0, end=0.0)]
+        detected = getattr(raw, "language", None) or cfg.language
+        return TranscriptResult(text=full_text, language=detected, segments=segments)
+    finally:
+        release_accelerator_memory()
+
+
+MAX_CUE_SECONDS = 12.0
+MAX_CUE_GAP = 1.0
+
+
+def _group_words(words: list[WordTiming]) -> list[Segment]:
+    """Sentence-length cues from word timings: break on . ? ! a pause, or length."""
+    segments: list[Segment] = []
+    current: list[WordTiming] = []
+
+    def flush() -> None:
+        if current:
+            segments.append(
+                Segment(
+                    text=" ".join(w.word for w in current).strip(),
+                    start=current[0].start,
+                    end=current[-1].end,
+                    words=list(current),
+                )
+            )
+
+    for word in words:
+        if current:
+            gap = word.start - current[-1].end
+            too_long = word.end - current[0].start > MAX_CUE_SECONDS
+            if gap > MAX_CUE_GAP or too_long:
+                flush()
+                current = []
+        current.append(word)
+        if word.word.endswith((".", "?", "!")):
+            flush()
+            current = []
+    flush()
+    return segments
+
+
+def _as_dict(obj) -> dict:
+    """Segments arrive as dicts or dataclass-ish objects depending on version."""
+    if isinstance(obj, dict):
+        return obj
+    return {k: getattr(obj, k) for k in ("text", "start", "end") if hasattr(obj, k)}
+
+
+# Qwen names languages; everything else here speaks ISO codes.
+_QWEN_LANGUAGES = {
+    "en": "English", "zh": "Chinese", "fr": "French", "de": "German",
+    "es": "Spanish", "it": "Italian", "ja": "Japanese", "ko": "Korean",
+    "pt": "Portuguese", "ru": "Russian", "ar": "Arabic",
+}
+
+
+def _qwen_language(code: str | None) -> str | None:
+    if not code:
+        return None
+    return _QWEN_LANGUAGES.get(code.lower(), code)
 
 
 def _transcribe_mlx(

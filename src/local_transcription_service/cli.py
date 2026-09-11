@@ -92,6 +92,13 @@ def _parse_formats(value: str) -> set[str]:
          "int8_float16).",
 )
 @click.option(
+    "--context",
+    default=None,
+    help="Domain terms biasing recognition, space-separated (qwen engine only). "
+         "Names and jargon actually spoken; guessing adds nothing and risks "
+         "the model inserting terms that were not said.",
+)
+@click.option(
     "--word-timestamps/--no-word-timestamps",
     "word_timestamps",
     default=None,
@@ -149,6 +156,7 @@ def main(
     engine: str | None,
     device: str | None,
     compute_type: str | None,
+    context: str | None,
     word_timestamps: bool | None,
     diarize: bool,
     diarization_step: float | None,
@@ -171,6 +179,7 @@ def main(
         engine=engine,
         device=device,
         compute_type=compute_type,
+        context=context,
     )
 
     want_words = word_timestamps if word_timestamps is not None else ("json" in format_set)
@@ -207,8 +216,12 @@ def main(
     from local_transcription_service.whisper_engine import EngineUnavailable, _require
 
     try:
-        _require("mlx_whisper" if selected_engine == ENGINE_MLX else "faster_whisper",
-                 selected_engine)
+        _require(
+            {"qwen": "mlx_qwen3_asr", ENGINE_MLX: "mlx_whisper"}.get(
+                selected_engine, "faster_whisper"
+            ),
+            selected_engine,
+        )
     except EngineUnavailable as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -223,7 +236,9 @@ def main(
         # Never fall back silently: an ignored model_path otherwise shows up as
         # an unexplained multi-gigabyte download.
         click.echo(f"  warning:  {model_warning} — falling back to {model_ref}", err=True)
-    if selected_engine == ENGINE_MLX:
+    if selected_engine == "qwen":
+        detail = "mlx-qwen3-asr (Apple GPU)"
+    elif selected_engine == ENGINE_MLX:
         detail = "mlx-whisper (Apple GPU)"
     else:
         detail = f"faster-whisper ({cfg.device}, {cfg.compute_type})"

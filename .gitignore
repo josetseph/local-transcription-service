@@ -26,3 +26,6 @@ config.yaml
 # Temp media from transcription
 *.whisper.wav
 .tmp-whisper/
+
+# stray mlx-qwen3-asr --mic output
+microphone-*.txt
