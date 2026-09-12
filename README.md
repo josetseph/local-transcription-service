@@ -119,11 +119,19 @@ Two backends, selected automatically:
 
 Measured on an M3 (see `tools/`):
 
-| task | model | why |
-|------|-------|-----|
-| recordings — meetings, lectures, interviews | **`qwen3-asr-1.7b`** (default) | 28.1% WER vs whisper's 36.1% on distant-mic meeting audio |
-| live dictation | `qwen3-asr-0.6b` | 0.0% WER at 0.36s per sentence; 4x snappier than whisper |
-| clean, close-mic batch | any | 1.7B and whisper both hit 0.0% |
+**`qwen3-asr-1.7b` for everything.** It is the default and needs no flags.
+
+| task | measured |
+|------|----------|
+| recordings — meetings, lectures, interviews | 28.1% WER vs whisper's 36.1% on distant-mic audio |
+| live dictation | 0.0% WER at 0.71s per sentence |
+| clean, close-mic batch | 0.0% WER |
+
+`qwen3-asr-0.6b` is roughly twice as fast (0.36s per sentence, also 0.0% WER on
+clean dictation) but weaker on proper nouns — 0/6 against 1.7B's 3/6 on names in
+a meeting recording. One model that handles names is worth a third of a second
+per sentence, so 1.7B is the pick everywhere. Reach for 0.6B only if latency
+becomes the binding constraint.
 
 Whisper stays available as `--engine mlx` but wins none of these. It is trained
 on 30-second windows, so it degrades on the short utterances dictation produces
