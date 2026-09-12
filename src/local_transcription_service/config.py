@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-DEFAULT_MODELS_ROOT = "~/.cache/whisper-models"
+DEFAULT_MODELS_ROOT = "~/.cache/transcribe-models"
 # Per-engine defaults: an MLX repo id handed to faster-whisper (or vice versa)
 # fails confusingly, so the default follows whichever engine is selected.
 DEFAULT_MODEL_ID_MLX = "mlx-community/whisper-large-v3-mlx"

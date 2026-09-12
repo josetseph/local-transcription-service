@@ -1,41 +1,60 @@
 # Copy to config.yaml (project root) or
 # ~/.config/local-transcription-service/config.yaml
 #
-# Point models_root / model_path at a local SSD, external drive, or NAS.
-# Example (external/NAS): /Volumes/NAS/Projects/models
+# Every model can be a plain local directory. Pointing model_path at a folder
+# skips the HuggingFace cache entirely, and for diarization it also removes the
+# access-token requirement.
 
 whisper:
-  # auto | mlx | faster-whisper. auto follows the local model's format when
-  # model_path is set, otherwise the platform (MLX on Apple Silicon).
+  # auto | qwen | mlx | faster-whisper
+  # auto follows the local model's on-disk format when model_path is set,
+  # otherwise the platform (qwen on Apple Silicon, faster-whisper elsewhere).
   engine: auto
-  # HuggingFace cache root for MLX model downloads when model_path is
-  # unset/invalid (repos land in <models_root>/huggingface).
-  models_root: ~/.cache/whisper-models
-  # Existing model folder: MLX (config.json + weights) or CTranslate2
-  # (model.bin). The format selects the engine when engine is auto.
-  # Leave empty to use model_id.
+
+  # Existing model folder. The layout selects the engine when engine is auto:
+  #   Qwen3-ASR    config.json naming a Qwen3-ASR architecture + safetensors
+  #   MLX          config.json + weights.safetensors (or weights.npz)
+  #   CTranslate2  model.bin
+  # Leave empty to download model_id instead.
   model_path: ""
-  # Model id used when model_path is missing or invalid. null picks the default
-  # for the selected engine: mlx-community/whisper-large-v3-mlx for mlx,
-  # Systran/faster-whisper-large-v3 for faster-whisper.
+
+  # Download cache used when model_path is empty or does not match the engine.
+  # HuggingFace repos land in <models_root>/huggingface.
+  models_root: ~/.cache/transcribe-models
+
+  # Model id for downloads. null picks the default for the selected engine:
+  #   qwen            Qwen/Qwen3-ASR-1.7B
+  #   mlx             mlx-community/whisper-large-v3-mlx
+  #   faster-whisper  Systran/faster-whisper-large-v3
   model_id: null
-  # faster-whisper only; MLX always uses the Apple GPU.
-  device: auto
-  compute_type: int8
-  # null = auto-detect language
+
+  # null = auto-detect
   language: null
 
-# Speaker diarization (optional; needs the "diarize" extra: pip install -e ".[diarize]")
+  # Space-separated domain terms biasing recognition (qwen only). Only helps for
+  # words actually spoken; padding it out risks the model inserting them.
+  context: ""
+
+  # faster-whisper only. MLX and qwen always use the Apple GPU.
+  device: auto
+  compute_type: int8
+
+# Speaker diarization (optional; needs the "diarize" extra)
 diarization:
-  # Gated on HuggingFace: accept the model's conditions, then set HF_TOKEN.
+  # A plain pipeline folder needs no HuggingFace token: its config.yaml resolves
+  # the $model/ sub-models relative to itself.
+  model_path: ""
+  # Used when model_path is empty. Gated on HuggingFace - accept the model's
+  # conditions and set HF_TOKEN, or point model_path at a local copy instead.
   model_id: pyannote/speaker-diarization-community-1
   # Seconds between analysis windows. pyannote defaults to 1.0; 2.0 measured
-  # ~1.9x faster at 95.7% agreement on an M3, 3.0 begins merging speakers.
+  # ~1.9x faster at 95.7% agreement with that default on an M3. 3.0 begins
+  # merging speakers.
   step: 2.0
-  # Read from HF_TOKEN / HUGGINGFACE_TOKEN when left null.
+  # Read from HF_TOKEN / HUGGINGFACE_TOKEN when null.
   token: null
-  # Exact speaker count when known; null lets clustering decide.
+  # Exact count when known; null lets clustering decide.
   speakers: null
-  # Bounds for the search when the exact count is unknown (null = unbounded).
+  # Bounds when the exact count is unknown.
   min_speakers: null
   max_speakers: null
