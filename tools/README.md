@@ -19,7 +19,12 @@ and seeing text. Captures on a callback thread and endpoints on silence, then
 runs each engine on the utterance.
 
 ```bash
-python tools/livemic.py --device 3 --say "your script"   # compares all three
+# dictation: one engine, reads like a transcriber
+python tools/livemic.py --only 1.7b --device 3
+
+# comparison: all three engines per utterance, scored against a script
+python tools/livemic.py --device 3 --say "your script"
+
 python tools/livemic.py --list-devices
 ```
 

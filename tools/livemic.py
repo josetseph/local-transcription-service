@@ -57,9 +57,10 @@ def whisper(model):
     return go
 
 
-ENGINES = [("qwen 0.6B", qwen("qwen3-asr-0.6b")),
-           ("qwen 1.7B", qwen("qwen3-asr-1.7b")),
-           ("whisper  ", whisper("whisper-large-v3-mlx"))]
+ALL_ENGINES = [("qwen 0.6B", qwen("qwen3-asr-0.6b")),
+               ("qwen 1.7B", qwen("qwen3-asr-1.7b")),
+               ("whisper  ", whisper("whisper-large-v3-mlx"))]
+ENGINES = ALL_ENGINES
 
 
 def main() -> None:
@@ -78,7 +79,19 @@ def main() -> None:
     ap.add_argument("--device", default=None,
                     help="input device name or index (default: system default)")
     ap.add_argument("--list-devices", action="store_true")
+    ap.add_argument("--only", default=None, metavar="NAME",
+                    help="run one engine instead of comparing all three "
+                         "(0.6b | 1.7b | whisper). Use this for actual dictation.")
     args = ap.parse_args()
+
+    global ENGINES
+    if args.only:
+        key = args.only.lower().replace("qwen", "").strip()
+        matches = [e for e in ALL_ENGINES if key in e[0].lower().replace(" ", "")]
+        if not matches:
+            sys.exit(f"--only {args.only!r} matched nothing; "
+                     f"try one of: 0.6b, 1.7b, whisper")
+        ENGINES = matches
 
     import sounddevice as sd
 
@@ -217,7 +230,10 @@ def main() -> None:
                         el = time.perf_counter() - t
                         lat[i].append(el)
                         collected[i].append(text)
-                        print(f"  {COLORS[i]}{label}{RESET} {BOLD}{el:5.2f}s{RESET}  {text}")
+                        if len(ENGINES) == 1:
+                            print(f"  {text}  {DIM}({el:.2f}s){RESET}")
+                        else:
+                            print(f"  {COLORS[i]}{label}{RESET} {BOLD}{el:5.2f}s{RESET}  {text}")
                     print()
 
     if buf:
