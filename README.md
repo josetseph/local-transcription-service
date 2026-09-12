@@ -213,9 +213,31 @@ transcribe PATH [OPTIONS]
   --speakers           Exact speaker count, when known
   --min-speakers       Lower bound when the count is unknown
   --max-speakers       Upper bound when the count is unknown
+  --live               Transcribe the microphone instead of a file
+  --input-device       Input device for --live (default: system input)
+  --list-devices       List input devices and exit
+  --silence            Pause that ends a sentence, seconds (default 0.6)
 ```
 
 Supported media includes common video (`mp4`, `mov`, `mkv`, `webm`, …) and audio (`wav`, `mp3`, `m4a`, `ogg`, `flac`, …). Non-WAV inputs are converted with ffmpeg to 16 kHz mono WAV temporarily, then removed.
+
+## Live transcription
+
+```bash
+transcribe --live                       # prints each sentence as you pause
+transcribe --live -o ~/Documents        # also writes the session on exit
+transcribe --live --silence 0.4         # cut sooner after you stop talking
+transcribe --list-devices               # show input devices
+```
+
+`PATH` is omitted with `--live`. It uses the system input device; `--input-device`
+overrides that. Ctrl+C stops and prints the sentence and word count, writing
+txt/srt/etc when `-o` is given.
+
+Utterances are cut at silence and transcribed one at a time through the same
+engine as file mode, so `--engine`, `--model-path` and `--context` all apply.
+Measured on an M3 with `qwen3-asr-1.7b`: about 0.7s between finishing a sentence
+and seeing it.
 
 ## Speaker diarization
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -34,8 +35,71 @@ def _parse_formats(value: str) -> set[str]:
     return parts
 
 
+def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
+              output_dir, format_set) -> None:
+    """Transcribe the microphone until interrupted, then write the session."""
+    import signal
+
+    from local_transcription_service.live import (
+        MicUnavailable,
+        stream_utterances,
+    )
+    from local_transcription_service.whisper_engine import Segment, TranscriptResult
+
+    device = int(input_device) if input_device and input_device.isdigit() else input_device
+    stopping = {"now": False}
+
+    def on_sigint(_sig, _frame):
+        stopping["now"] = True
+
+    signal.signal(signal.SIGINT, on_sigint)
+
+    def transcribe_one(wav_path):
+        from local_transcription_service.whisper_engine import transcribe_audio
+
+        return transcribe_audio(wav_path, cfg, word_timestamps=want_words).text
+
+    click.echo(f"Engine:     {engine} ({model_ref})")
+    click.echo("Listening.  Pause between sentences. Ctrl+C to stop.\n")
+
+    segments: list[Segment] = []
+    try:
+        for utterance in stream_utterances(
+            transcribe_one,
+            device=device,
+            silence=silence,
+            should_stop=lambda: stopping["now"],
+            on_ready=lambda t: None,
+        ):
+            if not utterance.text:
+                continue
+            click.echo(f"  {utterance.text}")
+            segments.append(
+                Segment(text=utterance.text, start=utterance.start, end=utterance.end)
+            )
+    except MicUnavailable as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not segments:
+        click.echo("\nNothing transcribed.")
+        return
+
+    text = " ".join(s.text for s in segments)
+    click.echo(f"\n{len(segments)} sentences, {len(text.split())} words")
+
+    if output_dir is not None:
+        from local_transcription_service.writers import write_outputs
+
+        stem_dir = output_dir.resolve()
+        stem_dir.mkdir(parents=True, exist_ok=True)
+        stem = stem_dir / time.strftime("live-%Y%m%d-%H%M%S")
+        result = TranscriptResult(text=text, language=cfg.language, segments=segments)
+        for out in write_outputs(result, stem, format_set):
+            click.echo(f"  wrote: {out}")
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.argument("path", type=click.Path(exists=True, path_type=Path), required=False)
 @click.option(
     "-o",
     "--output-dir",
@@ -139,6 +203,30 @@ def _parse_formats(value: str) -> set[str]:
          "the search (e.g. 8-12) instead of guessing an exact number.",
 )
 @click.option(
+    "--live",
+    is_flag=True,
+    help="Transcribe the microphone instead of a file. Prints each sentence as "
+         "you pause. Ctrl+C to stop.",
+)
+@click.option(
+    "--input-device",
+    "input_device",
+    default=None,
+    help="Input device name or index for --live. Default: the system input.",
+)
+@click.option(
+    "--list-devices",
+    is_flag=True,
+    help="List input devices and exit.",
+)
+@click.option(
+    "--silence",
+    type=float,
+    default=0.6,
+    show_default=True,
+    help="Pause length that ends a sentence, in seconds (--live only).",
+)
+@click.option(
     "-r",
     "--recursive",
     is_flag=True,
@@ -163,11 +251,16 @@ def main(
     speakers: int | None,
     min_speakers: int | None,
     max_speakers: int | None,
+    live: bool,
+    input_device: str | None,
+    list_devices: bool,
+    silence: float,
     recursive: bool,
 ) -> None:
-    """Transcribe video or audio locally on the Apple Silicon GPU (MLX).
+    """Transcribe video or audio locally on the Apple Silicon GPU.
 
-    PATH may be a media file or a directory of media files.
+    PATH may be a media file or a directory of media files. With --live, PATH is
+    omitted and the microphone is transcribed instead.
     """
     format_set = _parse_formats(formats)
     cfg = resolve_whisper_config(
@@ -206,6 +299,16 @@ def main(
         else None
     )
 
+    if list_devices:
+        from local_transcription_service.live import list_input_devices
+
+        for index, name, is_default in list_input_devices():
+            click.echo(f"  [{index}] {name}{'  <-- system input' if is_default else ''}")
+        return
+
+    if not live and path is None:
+        raise click.UsageError("Missing argument 'PATH'. Use --live to read the microphone.")
+
     try:
         selected_engine = resolve_engine(cfg)
     except ValueError as exc:
@@ -224,6 +327,11 @@ def main(
         )
     except EngineUnavailable as exc:
         raise click.ClickException(str(exc)) from exc
+
+    if live:
+        _run_live(cfg, model_ref, selected_engine, want_words, input_device, silence,
+                  output_dir, format_set)
+        return
 
     try:
         media_files = collect_media_files(path, recursive=recursive)
