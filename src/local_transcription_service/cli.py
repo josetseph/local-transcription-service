@@ -63,6 +63,7 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     click.echo("Listening.  Pause between sentences. Ctrl+C to stop.\n")
 
     segments: list[Segment] = []
+    recorded: list = []                      # the session audio is always kept
     try:
         for utterance in stream_utterances(
             transcribe_one,
@@ -70,6 +71,7 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
             silence=silence,
             should_stop=lambda: stopping["now"],
             on_ready=lambda t: None,
+            keep_audio=recorded,
         ):
             if not utterance.text:
                 continue
@@ -87,15 +89,26 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     text = " ".join(s.text for s in segments)
     click.echo(f"\n{len(segments)} sentences, {len(text.split())} words")
 
-    if output_dir is not None:
-        from local_transcription_service.writers import write_outputs
+    # Match file mode: write to the current directory unless -o says otherwise,
+    # rather than silently discarding the session.
+    from local_transcription_service.writers import write_outputs
 
-        stem_dir = output_dir.resolve()
-        stem_dir.mkdir(parents=True, exist_ok=True)
-        stem = stem_dir / time.strftime("live-%Y%m%d-%H%M%S")
-        result = TranscriptResult(text=text, language=cfg.language, segments=segments)
-        for out in write_outputs(result, stem, format_set):
-            click.echo(f"  wrote: {out}")
+    stem_dir = (output_dir if output_dir is not None else Path.cwd()).resolve()
+    stem_dir.mkdir(parents=True, exist_ok=True)
+    stem = stem_dir / time.strftime("live-%Y%m%d-%H%M%S")
+    result = TranscriptResult(text=text, language=cfg.language, segments=segments)
+    for out in write_outputs(result, stem, format_set):
+        click.echo(f"  wrote: {out}")
+
+    if recorded:
+        import numpy as np
+        import soundfile as sf
+
+        from local_transcription_service.live import RATE
+
+        wav_out = stem.with_suffix(".wav")
+        sf.write(str(wav_out), np.concatenate(recorded), RATE, subtype="PCM_16")
+        click.echo(f"  wrote: {wav_out}")
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})

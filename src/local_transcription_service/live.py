@@ -66,6 +66,7 @@ def stream_utterances(
     min_utterance: float = 0.5,
     max_utterance: float = 30.0,
     preroll: float = 0.4,
+    keep_audio: list | None = None,
     sensitivity: float = 2.5,
     should_stop=lambda: False,
     on_ready=None,
@@ -123,12 +124,16 @@ def stream_utterances(
                 if seconds < min_utterance:
                     continue
                 index += 1
+                if keep_audio is not None:
+                    keep_audio.append(audio)
                 yield _transcribe_chunk(transcribe, audio, index, clock - seconds, seconds)
 
         if buf:                                    # never discard buffered speech
             audio = np.concatenate(buf)
             if len(audio) / RATE >= min_utterance:
                 seconds = len(audio) / RATE
+                if keep_audio is not None:
+                    keep_audio.append(audio)
                 yield _transcribe_chunk(transcribe, audio, index + 1, clock - seconds, seconds)
 
 

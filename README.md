@@ -225,14 +225,27 @@ Supported media includes common video (`mp4`, `mov`, `mkv`, `webm`, …) and aud
 
 ```bash
 transcribe --live                       # prints each sentence as you pause
-transcribe --live -o ~/Documents        # also writes the session on exit
+transcribe --live -l en                 # pin the language (recommended)
+transcribe --live -o ~/Documents        # write the session elsewhere
 transcribe --live --silence 0.4         # cut sooner after you stop talking
 transcribe --list-devices               # show input devices
 ```
 
 `PATH` is omitted with `--live`. It uses the system input device; `--input-device`
-overrides that. Ctrl+C stops and prints the sentence and word count, writing
-txt/srt/etc when `-o` is given.
+overrides that.
+
+Ctrl+C stops the session and **always saves it** — to `-o` if given, otherwise the
+directory you ran from, named `live-YYYYmmdd-HHMMSS`:
+
+```
+live-20260912-170929.txt    the transcript
+live-20260912-170929.srt    timestamped cues
+live-20260912-170929.wav    the recorded speech
+```
+
+The wav holds the speech only; silence between sentences is never recorded, so it
+is shorter than the session. Pin `-l en` for live work — a two-second utterance
+gives language detection very little to go on, and it is decided per utterance.
 
 Utterances are cut at silence and transcribed one at a time through the same
 engine as file mode, so `--engine`, `--model-path` and `--context` all apply.
