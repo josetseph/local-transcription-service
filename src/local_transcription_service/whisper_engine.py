@@ -54,6 +54,27 @@ class TranscriptResult:
             ],
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> TranscriptResult:
+        """Inverse of to_dict, so a saved .json transcript can be worked on again."""
+        return cls(
+            text=data.get("text") or "",
+            language=data.get("language"),
+            segments=[
+                Segment(
+                    text=seg.get("text") or "",
+                    start=float(seg["start"]),
+                    end=float(seg["end"]),
+                    words=[
+                        WordTiming(word=w["word"], start=float(w["start"]), end=float(w["end"]))
+                        for w in (seg.get("words") or [])
+                    ],
+                    speaker=seg.get("speaker"),
+                )
+                for seg in (data.get("segments") or [])
+            ],
+        )
+
 
 def join_words(words: list[WordTiming]) -> str:
     """Rebuild text from stripped word timings (punctuation stays attached)."""
@@ -135,6 +156,17 @@ def _transcribe_qwen(
     import mlx_qwen3_asr
 
     try:
+        extra = {}
+        if word_timestamps and cfg.aligner_path is not None:
+            # Without an explicit aligner the library resolves one by repo id
+            # through the HuggingFace cache, which a plain-directory setup never
+            # populates — so word timings would quietly depend on a download.
+            if not (cfg.aligner_path / "config.json").exists():
+                raise FileNotFoundError(
+                    f"aligner_path {cfg.aligner_path} is not a forced-aligner folder "
+                    "(no config.json)"
+                )
+            extra["forced_aligner"] = str(cfg.aligner_path)
         raw = mlx_qwen3_asr.transcribe(
             str(audio_path),
             model=model_ref,
@@ -143,6 +175,7 @@ def _transcribe_qwen(
             return_timestamps=word_timestamps,
             context=cfg.context or "",
             verbose=show_progress,
+            **extra,
         )
 
         # With return_timestamps the model emits one entry per word, not

@@ -1,8 +1,8 @@
 # local-transcription-service
 
-Local CLI to transcribe **video and audio**, with speaker labels. Runs on the **Apple Silicon GPU** via [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), or on **CPU/CUDA anywhere else** via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — the right engine is picked for you. One command, configurable model directory (SSD, external drive, or NAS), and no cloud round-trip.
+Local CLI to transcribe **video and audio** — from files or live from the microphone — with speaker labels. Runs on the **Apple Silicon GPU** via [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) (default) or [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), or on **CPU/CUDA anywhere else** via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
 
-Measured on an M3: **~3.1x realtime** with `whisper-large-v3` — an 81-minute recording transcribes in about 26 minutes while using ~6% CPU. For comparison, the same model under faster-whisper on CPU ran at 0.71x, about 96 minutes.
+Measured on an M3 with the default `qwen3-asr-1.7b`: **~4.7x realtime**, so an 83-minute recording transcribes in roughly 18 minutes. For comparison, faster-whisper on CPU took 96 minutes for an 81-minute recording.
 
 **Repo:** [github.com/josetseph/local-transcription-service](https://github.com/josetseph/local-transcription-service)
 
@@ -117,7 +117,7 @@ Two backends, selected automatically:
 
 ### Which model
 
-Measured on an M3 (see `tools/`):
+Measured on an M3:
 
 **`qwen3-asr-1.7b` for everything.** It is the default and needs no flags.
 
@@ -209,6 +209,7 @@ transcribe PATH [OPTIONS]
   --compute-type       faster-whisper only: int8, float16, int8_float16
   --word-timestamps    Per-word timings (default: on only for json output)
   --diarize            Label speakers (who spoke when)
+  --diarize-only       Label a saved live session's transcript, no re-transcription
   --diarization-step   Seconds between diarization windows (default 2.0)
   --speakers           Exact speaker count, when known
   --min-speakers       Lower bound when the count is unknown
@@ -216,7 +217,7 @@ transcribe PATH [OPTIONS]
   --live               Transcribe the microphone instead of a file
   --input-device       Input device for --live (default: system input)
   --list-devices       List input devices and exit
-  --silence            Pause that ends a sentence, seconds (default 0.6)
+  --silence            Pause that ends a sentence, seconds (default 0.5)
 ```
 
 Supported media includes common video (`mp4`, `mov`, `mkv`, `webm`, …) and audio (`wav`, `mp3`, `m4a`, `ogg`, `flac`, …). Non-WAV inputs are converted with ffmpeg to 16 kHz mono WAV temporarily, then removed.
@@ -238,19 +239,66 @@ Ctrl+C stops the session and **always saves it** — to `-o` if given, otherwise
 directory you ran from, named `live-YYYYmmdd-HHMMSS`:
 
 ```
-live-20260912-170929.txt    the transcript
-live-20260912-170929.srt    timestamped cues
-live-20260912-170929.wav    the recorded speech
+live-20260913-101500.wav    the full recording, pauses included
+live-20260913-101500.txt    the transcript
+live-20260913-101500.srt    timestamped cues — times match the wav exactly
+live-20260913-101500.json   word timings — lets you add speakers later
 ```
 
-The wav holds the speech only; silence between sentences is never recorded, so it
-is shorter than the session. Pin `-l en` for live work — a two-second utterance
-gives language detection very little to go on, and it is decided per utterance.
+The recording streams to disk as it is captured, so a crash keeps everything
+already heard.
 
-Utterances are cut at silence and transcribed one at a time through the same
-engine as file mode, so `--engine`, `--model-path` and `--context` all apply.
-Measured on an M3 with `qwen3-asr-1.7b`: about 0.7s between finishing a sentence
-and seeing it.
+### Speakers later, without transcribing again
+
+```bash
+transcribe --diarize-only live-20260913-101500.wav
+```
+
+Diarization needs only the audio and the transcript's timestamps, and a live session
+keeps both. `--diarize-only` diarizes the `.wav`, labels each word in the existing
+`.json`, and rewrites that session's `.txt`/`.srt`/`.json` in place — speech
+recognition never runs again. It is the same result `--live --diarize` gives, later.
+
+To transcribe the recording again instead — with full context, catching words the live
+threshold missed — use `transcribe live-….wav --diarize -o elsewhere/`. Without `-o`
+that replaces the live transcript.
+
+### Speakers in a live session
+
+```bash
+transcribe --live -l en --diarize
+```
+
+Transcription stays live. When you stop, the recording is diarized and each word
+is assigned to whoever was speaking at that moment — there is no second
+transcription pass, and a sentence is split where the speaker changes inside it.
+The plain transcript is written first, so interrupting diarization loses nothing.
+
+Word timings cost about 0.02s per sentence and use the forced-aligner model, set
+with `whisper.aligner_path`.
+
+Pin `-l en` for live work — language is otherwise detected per utterance, and a
+two-second utterance gives the detector very little to go on.
+
+### How sentences are detected
+
+A sentence ends after `--silence` seconds (default 0.5) below a speech threshold.
+The threshold follows the room: three times the 10th-percentile loudness of the
+last five seconds, refreshed every half second. It is not calibrated once on
+whatever is playing when you start — that mattered: calibrating on the median of
+the first 1.2s of a lecture that began mid-sentence set the bar above a quiet
+student and dropped 63% of their words.
+
+Measured on a five-minute distant-mic lecture and two close-mic dictations:
+
+| | quiet speaker's words | loud speaker's words | close-mic sentences found |
+|---|---|---|---|
+| previous: median calibration, 0.6s silence | 37% | 92% | 4 |
+| rolling floor, 0.5s silence | 85% | 98% | 4 |
+
+Live mode only transcribes what crosses the threshold. For an in-room recording
+with speakers at different distances, `transcribe recording.wav --diarize`
+transcribes every word rather than 85% of the quietest person's.
 
 ## Speaker diarization
 
@@ -263,10 +311,11 @@ talking at that moment.
 pip install -e ".[diarize]"
 ```
 
-The model is gated: accept the conditions on
-[pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1),
-create a read token, then either `export HF_TOKEN=...` or set `diarization.token`
-in your config. Weights cache under `<models_root>/huggingface` like everything else.
+The model is gated on HuggingFace. Either accept the conditions on
+[pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+and `export HF_TOKEN=...`, or copy the pipeline into a plain folder and point
+`diarization.model_path` at it. Its `config.yaml` resolves the sub-models relative
+to itself, so a local folder needs no token and no cache.
 
 ```bash
 transcribe meeting.m4a --diarize                             # count auto-detected

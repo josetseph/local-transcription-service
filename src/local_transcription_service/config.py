@@ -46,6 +46,8 @@ class WhisperConfig:
     compute_type: str = DEFAULT_COMPUTE_TYPE
     # Domain terms biasing recognition (qwen only; other engines ignore it).
     context: str = ""
+    # Forced-aligner folder for word timings (qwen only). None: library default id.
+    aligner_path: Path | None = None
 
 
 def _expand(path: str | Path) -> Path:
@@ -62,6 +64,7 @@ def _default_dict() -> dict[str, Any]:
             "language": None,
             "engine": DEFAULT_ENGINE,
             "context": "",
+            "aligner_path": "",
             "device": DEFAULT_DEVICE,
             "compute_type": DEFAULT_COMPUTE_TYPE,
         },
@@ -107,6 +110,8 @@ def _env_overlay() -> dict[str, Any]:
         whisper["models_root"] = value
     if value := os.environ.get("WHISPER_MODEL_PATH"):
         whisper["model_path"] = value
+    if value := os.environ.get("WHISPER_ALIGNER_PATH"):
+        whisper["aligner_path"] = value
     if value := os.environ.get("WHISPER_MODEL_ID"):
         whisper["model_id"] = value
     if value := os.environ.get("WHISPER_ENGINE"):
@@ -144,6 +149,7 @@ def resolve_whisper_config(
     device: str | None = None,
     compute_type: str | None = None,
     context: str | None = None,
+    aligner_path: str | None = None,
 ) -> WhisperConfig:
     """Build final WhisperConfig. CLI kwargs override file/env when provided."""
     raw = load_raw_config()["whisper"]
@@ -155,6 +161,7 @@ def resolve_whisper_config(
     dev = device if device is not None else raw.get("device", DEFAULT_DEVICE)
     ctype = compute_type if compute_type is not None else raw.get("compute_type", DEFAULT_COMPUTE_TYPE)
     ctx = context if context is not None else (raw.get("context") or "")
+    aligner_raw = aligner_path if aligner_path is not None else (raw.get("aligner_path") or "")
 
     if language_explicit:
         lang = language
@@ -176,6 +183,7 @@ def resolve_whisper_config(
         device=str(dev),
         compute_type=str(ctype),
         context=str(ctx),
+        aligner_path=_expand(aligner_raw) if str(aligner_raw).strip() else None,
     )
 
 

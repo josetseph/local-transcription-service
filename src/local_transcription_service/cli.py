@@ -35,16 +35,71 @@ def _parse_formats(value: str) -> set[str]:
     return parts
 
 
+def _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg) -> None:
+    """Label speakers on an existing transcript, without transcribing again.
+
+    Diarization needs only audio plus the transcript's timestamps. A live session
+    keeps both, so running speech recognition again would redo work already on disk.
+    """
+    import json
+
+    from local_transcription_service.diarize import apply_diarization, diarize_audio
+    from local_transcription_service.whisper_engine import TranscriptResult
+    from local_transcription_service.writers import write_outputs
+
+    path = path.resolve()
+    stem = path.with_suffix("")
+    transcript = stem.with_suffix(".json")
+    audio = stem.with_suffix(".wav") if path.suffix.lower() == ".json" else path
+    if not transcript.exists():
+        raise click.ClickException(
+            f"no transcript at {transcript}. --diarize-only reads the .json saved beside "
+            "a live recording; to label any other file use --diarize."
+        )
+    if not audio.exists():
+        raise click.ClickException(f"no recording at {audio}.")
+
+    result = TranscriptResult.from_dict(json.loads(transcript.read_text(encoding="utf-8")))
+    if not result.segments:
+        raise click.ClickException(f"{transcript} has no segments to label.")
+    missing = sum(1 for seg in result.segments if not seg.words)
+    if missing:
+        click.echo(
+            f"  note: {missing} of {len(result.segments)} sentences have no word timings; "
+            "those are labelled whole, which misses speaker changes inside a sentence.",
+            err=True,
+        )
+
+    click.echo(f"Recording:  {audio}")
+    click.echo(f"Transcript: {transcript} ({len(result.segments)} segments, not re-transcribed)")
+    turns = diarize_audio(audio, diar_cfg, models_root=cfg.models_root,
+                          show_progress=sys.stderr.isatty())
+    result = apply_diarization(result, turns)
+    found = sorted({t.speaker for t in turns})
+    click.echo(f"  speakers: {len(found)} ({', '.join(found)})")
+
+    target = output_dir.resolve() if output_dir is not None else stem.parent
+    target.mkdir(parents=True, exist_ok=True)
+    for out in write_outputs(result, target / stem.name, format_set | {"json"}):
+        click.echo(f"  wrote: {out}")
+
+
 def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
-              output_dir, format_set) -> None:
-    """Transcribe the microphone until interrupted, then write the session."""
+              output_dir, format_set, diar_cfg) -> None:
+    """Transcribe the microphone until interrupted, then write the session.
+
+    The full recording streams to disk as it is captured, pauses included, so
+    the transcript's session timestamps line up with the wav and a crash keeps
+    everything already heard. With --diarize, speakers are assigned afterwards
+    from that recording, word by word — no second transcription pass.
+    """
     import signal
 
-    from local_transcription_service.live import (
-        MicUnavailable,
-        stream_utterances,
-    )
-    from local_transcription_service.whisper_engine import Segment, TranscriptResult
+    import soundfile as sf
+
+    from local_transcription_service.live import RATE, MicUnavailable, stream_utterances
+    from local_transcription_service.whisper_engine import Segment, TranscriptResult, WordTiming
+    from local_transcription_service.writers import write_outputs
 
     device = int(input_device) if input_device and input_device.isdigit() else input_device
     stopping = {"now": False}
@@ -57,58 +112,76 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     def transcribe_one(wav_path):
         from local_transcription_service.whisper_engine import transcribe_audio
 
-        return transcribe_audio(wav_path, cfg, word_timestamps=want_words).text
-
-    click.echo(f"Engine:     {engine} ({model_ref})")
-    click.echo("Listening.  Pause between sentences. Ctrl+C to stop.\n")
-
-    segments: list[Segment] = []
-    recorded: list = []                      # the session audio is always kept
-    try:
-        for utterance in stream_utterances(
-            transcribe_one,
-            device=device,
-            silence=silence,
-            should_stop=lambda: stopping["now"],
-            on_ready=lambda t: None,
-            keep_audio=recorded,
-        ):
-            if not utterance.text:
-                continue
-            click.echo(f"  {utterance.text}")
-            segments.append(
-                Segment(text=utterance.text, start=utterance.start, end=utterance.end)
-            )
-    except MicUnavailable as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    if not segments:
-        click.echo("\nNothing transcribed.")
-        return
-
-    text = " ".join(s.text for s in segments)
-    click.echo(f"\n{len(segments)} sentences, {len(text.split())} words")
-
-    # Match file mode: write to the current directory unless -o says otherwise,
-    # rather than silently discarding the session.
-    from local_transcription_service.writers import write_outputs
+        # Word timings let --diarize split a sentence where the speaker changes
+        # mid-utterance; measured at +0.02s per utterance on an M3. Requested
+        # only when diarizing or writing json, matching file mode.
+        if want_words:
+            return transcribe_audio(wav_path, cfg, word_timestamps=True)
+        return transcribe_audio(wav_path, cfg, word_timestamps=False).text
 
     stem_dir = (output_dir if output_dir is not None else Path.cwd()).resolve()
     stem_dir.mkdir(parents=True, exist_ok=True)
     stem = stem_dir / time.strftime("live-%Y%m%d-%H%M%S")
+    wav_out = stem.with_suffix(".wav")
+
+    click.echo(f"Engine:     {engine} ({model_ref})")
+    click.echo(f"Recording:  {wav_out}")
+    click.echo("Listening.  Pause between sentences. Ctrl+C to stop.\n")
+
+    segments: list[Segment] = []
+    try:
+        with sf.SoundFile(str(wav_out), "w", samplerate=RATE, channels=1,
+                          subtype="PCM_16") as recording:
+            for utterance in stream_utterances(
+                transcribe_one,
+                device=device,
+                silence=silence,
+                should_stop=lambda: stopping["now"],
+                record=recording.write,
+            ):
+                if not utterance.text:
+                    continue
+                click.echo(f"  {utterance.text}")
+                segments.append(
+                    Segment(
+                        text=utterance.text,
+                        start=utterance.start,
+                        end=utterance.end,
+                        words=[WordTiming(word=w, start=a, end=b) for w, a, b in utterance.words],
+                    )
+                )
+    except MicUnavailable as exc:
+        wav_out.unlink(missing_ok=True)
+        raise click.ClickException(str(exc)) from exc
+
+    # Capture is over; let a further Ctrl+C interrupt diarization normally.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+
+    click.echo(f"\n  wrote: {wav_out}")
+    if not segments:
+        click.echo("Nothing transcribed.")
+        return
+
+    text = " ".join(s.text for s in segments)
     result = TranscriptResult(text=text, language=cfg.language, segments=segments)
-    for out in write_outputs(result, stem, format_set):
+    click.echo(f"{len(segments)} sentences, {len(text.split())} words")
+
+    # Write the plain transcript first, so interrupting diarization loses nothing.
+    written = write_outputs(result, stem, format_set)
+
+    if diar_cfg is not None:
+        from local_transcription_service.diarize import apply_diarization, diarize_audio
+
+        click.echo("Diarizing the recording...")
+        turns = diarize_audio(wav_out, diar_cfg, models_root=cfg.models_root,
+                              show_progress=sys.stderr.isatty())
+        result = apply_diarization(result, turns)
+        found = sorted({t.speaker for t in turns})
+        click.echo(f"  speakers: {len(found)} ({', '.join(found)})")
+        written = write_outputs(result, stem, format_set)
+
+    for out in written:
         click.echo(f"  wrote: {out}")
-
-    if recorded:
-        import numpy as np
-        import soundfile as sf
-
-        from local_transcription_service.live import RATE
-
-        wav_out = stem.with_suffix(".wav")
-        sf.write(str(wav_out), np.concatenate(recorded), RATE, subtype="PCM_16")
-        click.echo(f"  wrote: {wav_out}")
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -137,25 +210,26 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
 @click.option(
     "--models-root",
     default=None,
-    help="Directory for Whisper model downloads/cache (local or external drive).",
+    help="Download cache for models fetched by id (local or external drive).",
 )
 @click.option(
     "--model-path",
     default=None,
-    help="Path to a local MLX model folder (config.json + weights.safetensors).",
+    help="Local model folder: Qwen3-ASR, MLX (config.json + weights) or "
+         "CTranslate2 (model.bin). Its format picks the engine.",
 )
 @click.option(
     "--model-id",
     default=None,
-    help="HuggingFace MLX model id when model-path is unset/invalid.",
+    help="HuggingFace model id used when --model-path is unset or invalid.",
 )
 @click.option(
     "--engine",
     type=click.Choice(["auto", *ENGINES]),
     default=None,
-    help="Backend: mlx (Apple Silicon GPU) or faster-whisper (CPU/CUDA, all "
-         "platforms). Default auto: follows the local model's format, else the "
-         "platform.",
+    help="Backend: qwen or mlx (Apple Silicon GPU), or faster-whisper (CPU/CUDA, "
+         "all platforms). Default auto: follows the local model's format, else "
+         "the platform.",
 )
 @click.option(
     "--device",
@@ -185,8 +259,16 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
 @click.option(
     "--diarize",
     is_flag=True,
-    help="Label speakers (who spoke when) with pyannote. Requires the "
-         "'diarize' extra and a HuggingFace token for the gated model.",
+    help="Label speakers (who spoke when) with pyannote. Requires the 'diarize' "
+         "extra. A local pipeline folder in diarization.model_path needs no "
+         "HuggingFace token.",
+)
+@click.option(
+    "--diarize-only",
+    is_flag=True,
+    help="Add speaker labels to a saved recording's existing transcript without "
+         "transcribing again. PATH is the recording (e.g. live-*.wav); its .json "
+         "must sit beside it. Updates that session's files in place.",
 )
 @click.option(
     "--diarization-step",
@@ -235,7 +317,7 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
 @click.option(
     "--silence",
     type=float,
-    default=0.6,
+    default=0.5,
     show_default=True,
     help="Pause length that ends a sentence, in seconds (--live only).",
 )
@@ -260,6 +342,7 @@ def main(
     context: str | None,
     word_timestamps: bool | None,
     diarize: bool,
+    diarize_only: bool,
     diarization_step: float | None,
     speakers: int | None,
     min_speakers: int | None,
@@ -308,7 +391,7 @@ def main(
             min_speakers=min_speakers,
             max_speakers=max_speakers,
         )
-        if diarize
+        if diarize or diarize_only
         else None
     )
 
@@ -317,6 +400,16 @@ def main(
 
         for index, name, is_default in list_input_devices():
             click.echo(f"  [{index}] {name}{'  <-- system input' if is_default else ''}")
+        return
+
+    if diarize_only:
+        # Before the engine preflight: this path never runs speech recognition,
+        # so it must not demand an ASR backend be installed.
+        if live:
+            raise click.UsageError("--diarize-only works on a saved recording, not with --live.")
+        if path is None:
+            raise click.UsageError("--diarize-only needs PATH: the recording to label.")
+        _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg)
         return
 
     if not live and path is None:
@@ -342,8 +435,11 @@ def main(
         raise click.ClickException(str(exc)) from exc
 
     if live:
-        _run_live(cfg, model_ref, selected_engine, want_words, input_device, silence,
-                  output_dir, format_set)
+        # A live session always keeps a word-timed .json beside its .wav, so it can
+        # be diarized later with --diarize-only instead of transcribed again. An
+        # explicit --no-word-timestamps is still honoured.
+        _run_live(cfg, model_ref, selected_engine, word_timestamps is not False,
+                  input_device, silence, output_dir, format_set | {"json"}, diar_cfg)
         return
 
     try:

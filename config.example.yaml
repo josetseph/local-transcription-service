@@ -35,6 +35,10 @@ whisper:
   # words actually spoken; padding it out risks the model inserting them.
   context: ""
 
+  # Forced-aligner folder for word timings (qwen only). --diarize and
+  # --word-timestamps need it. Empty fetches Qwen/Qwen3-ForcedAligner-0.6B.
+  aligner_path: ""
+
   # faster-whisper only. MLX and qwen always use the Apple GPU.
   device: auto
   compute_type: int8
