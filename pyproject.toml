@@ -14,6 +14,15 @@ keywords = ["whisper", "transcription", "speech-to-text", "mlx", "apple-silicon"
 dependencies = [
     "click>=8.1",
     "pyyaml>=6.0",
+    # Imported directly by --live and by model setup; nothing else guarantees them.
+    "numpy",
+    "sounddevice>=0.4",
+    "soundfile>=0.12",
+    "huggingface_hub>=0.24",
+    # System audio for --live: a Core Audio process tap on macOS; WASAPI loopback
+    # or a PulseAudio/PipeWire monitor elsewhere.
+    "pyobjc-framework-CoreAudio>=12.2; sys_platform == 'darwin'",
+    "soundcard>=0.4.6; sys_platform != 'darwin'",
     # One engine per platform, so a bare install works everywhere: MLX uses the
     # GPU on Apple Silicon, faster-whisper covers Linux, Windows and Intel Macs.
     "mlx-qwen3-asr>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",

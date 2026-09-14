@@ -15,7 +15,9 @@ from pathlib import Path
 
 from local_transcription_service.memory import release_accelerator_memory
 
-DEFAULT_MODEL_ID = "pyannote/speaker-diarization-community-1"
+# Byte-identical to pyannote/speaker-diarization-community-1, without the gate:
+# no HuggingFace account or token needed.
+DEFAULT_MODEL_ID = "pyannote-community/speaker-diarization-community-1"
 DEFAULT_STEP = 2.0
 
 

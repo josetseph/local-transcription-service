@@ -1,6 +1,6 @@
 # local-transcription-service
 
-Local CLI to transcribe **video and audio** — from files or live from the microphone — with speaker labels. Runs on the **Apple Silicon GPU** via [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) (default) or [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), or on **CPU/CUDA anywhere else** via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
+Local CLI to transcribe **video and audio** — from files, the microphone, or whatever your computer is playing (the other side of a call) — with speaker labels. Runs on the **Apple Silicon GPU** via [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) (default) or [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), or on **CPU/CUDA anywhere else** via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
 
 Measured on an M3 with the default `qwen3-asr-1.7b`: **~4.7x realtime**, so an 83-minute recording transcribes in roughly 18 minutes. For comparison, faster-whisper on CPU took 96 minutes for an 81-minute recording.
 
@@ -11,6 +11,7 @@ Measured on an M3 with the default `qwen3-asr-1.7b`: **~4.7x realtime**, so an 8
 - Python **3.11+**
 - An **Apple Silicon Mac** for the GPU engine; any platform works on CPU/CUDA
 - [ffmpeg](https://ffmpeg.org/) on your `PATH` — `brew install ffmpeg`
+- macOS 14.4+ to capture system audio on a Mac (`--source system`)
 
 ## Install
 
@@ -23,6 +24,33 @@ pip install -e .
 ```
 
 This installs the `transcribe` command into that environment.
+
+### First run: choosing a model
+
+The first time you transcribe with no model configured, `transcribe` downloads one.
+In a terminal it asks which, and where to put it:
+
+```
+Choose a speech model (figures measured on an Apple M3):
+
+  1) Qwen3-ASR 1.7B  (4.7 GB + 1.8 GB aligner)  recommended
+     lecture WER 28%, 4.7x realtime · dictation 0% WER, 0.7s per sentence · names: 3 of 6 right, where 0.6B got none
+  2) Qwen3-ASR 0.6B  (1.9 GB + 1.8 GB aligner)
+     lecture WER 33-35%, 13.9x realtime · dictation 0% WER, 0.4s per sentence
+  3) Whisper large-v3  (3.1 GB)
+     lecture WER 36%, 2.0x realtime · dictation 8% WER, 1.4s per sentence
+
+Model [1]:
+Download to [~/.cache/transcribe-models]:
+```
+
+Without a terminal to ask in (a script, a pipe), it takes the recommended model. The
+speech model, the aligner that gives Qwen its word timings, and the 30 MB speaker
+model land as plain folders, and their paths are saved to
+`~/.config/local-transcription-service/config.yaml`, so later runs work offline. Run
+`transcribe --setup` to choose again. Off Apple Silicon the choices are faster-whisper
+large-v3 and small, which have not been measured. None of the models needs a
+HuggingFace account.
 
 ### Use from any terminal (optional)
 
@@ -210,6 +238,8 @@ transcribe PATH [OPTIONS]
   --word-timestamps    Per-word timings (default: on only for json output)
   --diarize            Label speakers (who spoke when)
   --diarize-only       Label a saved live session's transcript, no re-transcription
+  --source SOURCE      What --live hears: mic (default), system, or both
+  --setup              Choose and download a speech model, then exit
   --diarization-step   Seconds between diarization windows (default 2.0)
   --speakers           Exact speaker count, when known
   --min-speakers       Lower bound when the count is unknown
@@ -230,6 +260,7 @@ transcribe --live -l en                 # pin the language (recommended)
 transcribe --live -o ~/Documents        # write the session elsewhere
 transcribe --live --silence 0.4         # cut sooner after you stop talking
 transcribe --list-devices               # show input devices
+transcribe --live --source both         # a call: you and the other side
 ```
 
 `PATH` is omitted with `--live`. It uses the system input device; `--input-device`
@@ -247,6 +278,45 @@ live-20260913-101500.json   word timings — lets you add speakers later
 
 The recording streams to disk as it is captured, so a crash keeps everything
 already heard.
+
+### Meetings: capturing what the computer plays
+
+The microphone hears you, not the other side of a call — that goes to your speakers.
+`--source system` captures what the computer plays; `--source both` mixes it with the
+microphone, so both sides land in one transcript.
+
+```bash
+transcribe --live --source both          # a call: you and them
+transcribe --live --source system        # a webinar or video: only what plays
+transcribe --live --source both --diarize
+```
+
+Nothing is rerouted and no virtual device is installed; the input and output devices
+stay as the system set them.
+
+| Platform | How system audio is captured |
+|----------|------------------------------|
+| macOS 14.4+ | A Core Audio process tap, read through a private device that only this process can see and that is removed on exit |
+| Windows | WASAPI loopback of the default output device |
+| Linux | The PulseAudio/PipeWire monitor of the default output device |
+
+The tap copies what every app plays, so it follows whichever output the system has
+selected. On an M3, speech played through the built-in speakers and through a Bluetooth
+headset came back sample-for-sample (correlation 1.00) — the headset in music mode
+(48 kHz) and in call mode with its microphone open (24 kHz) — and the system's input and
+output devices were identical before and after every run. Switching the output in the
+middle of a session has not been tested. Because it hears every app, notification sounds
+and anything else playing end up in the transcript too. No permission prompt appeared on that machine; if a session prints
+`no system audio yet` while something is playing, allow your terminal to record system
+audio under System Settings > Privacy & Security. **Windows and Linux** go through the
+[soundcard](https://github.com/bastibe/SoundCard) library's loopback support and have
+not been tested on real hardware yet.
+
+
+With a call on speakers, the microphone hears the other side as well, so `--source both`
+gets them twice, slightly delayed. On a 30-second lecture clip played through the
+speakers, `both` disagreed with file mode on 62-73% of words, against 42-47% for
+`system` alone. Headphones keep the speakers out of the microphone.
 
 ### Speakers later, without transcribing again
 
@@ -311,11 +381,12 @@ talking at that moment.
 pip install -e ".[diarize]"
 ```
 
-The model is gated on HuggingFace. Either accept the conditions on
-[pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
-and `export HF_TOKEN=...`, or copy the pipeline into a plain folder and point
-`diarization.model_path` at it. Its `config.yaml` resolves the sub-models relative
-to itself, so a local folder needs no token and no cache.
+The default model,
+[pyannote-community/speaker-diarization-community-1](https://huggingface.co/pyannote-community/speaker-diarization-community-1),
+is byte-identical to pyannote's gated community-1 pipeline but ungated, so it needs no
+HuggingFace account or token. First-run setup downloads it (30 MB) into a plain folder
+and points `diarization.model_path` at it; that folder's `config.yaml` resolves the
+sub-models relative to itself, so it also works offline.
 
 ```bash
 transcribe meeting.m4a --diarize                             # count auto-detected
@@ -368,7 +439,7 @@ plus 24 minutes of diarization.
 | `WHISPER_DEVICE` | faster-whisper only: `auto`, `cpu`, `cuda` |
 | `WHISPER_COMPUTE_TYPE` | faster-whisper only: `int8`, `float16` |
 | `WHISPER_LANGUAGE` | Language code, or empty/`auto` for detect |
-| `HF_TOKEN` | HuggingFace token for the gated diarization model |
+| `HF_TOKEN` | Only for a gated model you configure yourself; the defaults need none |
 
 ## Troubleshooting
 
@@ -380,7 +451,7 @@ plus 24 minutes of diarization.
 
 **Slow or out-of-memory** — Try `mlx-community/whisper-large-v3-turbo` (2.6x faster, but read the turbo warning above) or a smaller `model_id` (e.g. `mlx-community/whisper-small-mlx`), and drop `--word-timestamps` if you do not need per-word timings — it adds an alignment pass.
 
-**Large first download** — Set `WHISPER_MODELS_ROOT` to a drive with enough free space before the first run.
+**Large first download** — The recommended model is 6.5 GB with its aligner. Give a folder on a drive with room at the first-run prompt, or set `WHISPER_MODELS_ROOT` before a run with no terminal. Setup checks free space before downloading.
 
 ## License
 

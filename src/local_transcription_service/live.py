@@ -1,4 +1,4 @@
-"""Live microphone transcription: endpoint on silence, transcribe each utterance.
+"""Live transcription of the microphone or system audio: endpoint on silence, transcribe each utterance.
 
 Utterances are written to a temporary wav and handed to the normal
 ``transcribe_audio`` path, so --live works with whichever engine the config
@@ -13,6 +13,8 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from local_transcription_service.capture import CaptureUnavailable, open_source
 
 RATE = 16000
 FRAME_SECONDS = 0.02
@@ -39,35 +41,39 @@ class Utterance:
     words: list = field(default_factory=list)
 
 
-class MicUnavailable(RuntimeError):
-    """No usable capture device."""
+SILENCE_NOTICE_FRAMES = int(10 / FRAME_SECONDS)
 
 
-def _calibrate(audio_q) -> list[float]:
-    """Seed the loudness history, skipping the digital silence of device spin-up.
+def _calibrate(audio_q) -> tuple[list[float], list]:
+    """Measure the room before listening, and hand back every frame read doing it.
 
-    Including those frames drags the floor to zero, which puts the speech
-    threshold below room tone — the endpointer then never fires at all.
+    Levels skip the digital silence of device spin-up: including those frames
+    drags the floor to zero, which puts the speech threshold below room tone —
+    the endpointer then never fires at all. The frames are returned so the caller
+    can replay them; dropping them cut the start of every session, so a
+    30-second clip came back as a 28.8-second recording.
     """
     import numpy as np
 
     levels: list[float] = []
+    chunks: list = []
     deadline = time.time() + 4.0
     while len(levels) < 60 and time.time() < deadline:
         try:
             chunk = audio_q.get(timeout=0.5)
         except queue.Empty:
             break
+        chunks.append(chunk)
         rms = float(np.sqrt((chunk**2).mean()))
         if rms > 1e-6:
             levels.append(rms)
     if len(levels) < 20:
-        raise MicUnavailable(
+        raise CaptureUnavailable(
             f"the input device delivered only {len(levels)} usable frames of audio. "
             "Check that it is unmuted and that this terminal has microphone "
             "permission. --list-devices shows the alternatives."
         )
-    return levels
+    return levels, chunks
 
 
 def stream_utterances(
@@ -82,6 +88,8 @@ def stream_utterances(
     sensitivity: float = 3.0,
     should_stop=lambda: False,
     on_ready=None,
+    source: str = "mic",
+    on_silence=None,
 ):
     """Yield an ``Utterance`` each time the speaker pauses.
 
@@ -89,29 +97,29 @@ def stream_utterances(
     carry word timings relative to that clip. ``record``, if given, is
     called with every captured frame — pauses included — so the caller can keep
     a continuous recording whose timeline matches the utterance timestamps.
+    ``source`` is mic, system or both (see capture.py); ``on_silence`` is called
+    once if nothing but digital silence has arrived after 10 seconds.
     """
     import numpy as np
-    import sounddevice as sd
 
     frame = int(FRAME_SECONDS * RATE)
     audio_q: queue.Queue = queue.Queue()
 
-    def on_audio(indata, _frames, _time, _status):
-        audio_q.put(np.asarray(indata, dtype=np.float32).reshape(-1).copy())
+    with open_source(source, audio_q.put, rate=RATE, frame=frame, device=device):
+        # System audio has no room tone to measure: it is digital silence until
+        # something plays, and waiting for sound would calibrate on speech. It
+        # starts at the minimum threshold and lets the rolling floor take over.
+        levels, replay = ([], []) if source == "system" else _calibrate(audio_q)
+        pending = collections.deque(replay)
+        history = collections.deque(maxlen=int(FLOOR_WINDOW_SECONDS / FRAME_SECONDS))
 
-    with sd.InputStream(
-        samplerate=RATE, channels=1, dtype="float32",
-        blocksize=frame, callback=on_audio, device=device,
-    ):
-        history = collections.deque(
-            _calibrate(audio_q), maxlen=int(FLOOR_WINDOW_SECONDS / FRAME_SECONDS)
-        )
-
-        def floor_threshold() -> float:
-            level = float(np.percentile(np.fromiter(history, dtype=float), FLOOR_PERCENTILE))
+        def floor_threshold(sample) -> float:
+            if not sample:                       # nothing but digital silence so far
+                return MIN_THRESHOLD
+            level = float(np.percentile(np.fromiter(sample, dtype=float), FLOOR_PERCENTILE))
             return max(level * sensitivity, MIN_THRESHOLD)
 
-        threshold = floor_threshold()
+        threshold = floor_threshold(levels)
         if on_ready is not None:
             on_ready(threshold)
 
@@ -121,10 +129,13 @@ def stream_utterances(
         clock, frames = 0.0, 0
 
         while not should_stop():
-            try:
-                chunk = audio_q.get(timeout=0.2)
-            except queue.Empty:
-                continue
+            if pending:                          # calibration's frames: recorded and heard too
+                chunk = pending.popleft()
+            else:
+                try:
+                    chunk = audio_q.get(timeout=0.2)
+                except queue.Empty:
+                    continue
             clock += FRAME_SECONDS
             if record is not None:
                 record(chunk)
@@ -133,10 +144,12 @@ def stream_utterances(
             # Refresh from frames already heard, then add this one, so the
             # threshold judging a frame never includes that frame.
             if frames and frames % FLOOR_REFRESH_FRAMES == 0:
-                threshold = floor_threshold()
+                threshold = floor_threshold(history)
             if rms > 1e-6:
                 history.append(rms)
             frames += 1
+            if on_silence is not None and frames == SILENCE_NOTICE_FRAMES and not history:
+                on_silence()
 
             if rms > threshold:
                 if not speaking:

@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from local_transcription_service import __version__
+from local_transcription_service.capture import SOURCES
 from local_transcription_service.config import (
     ENGINE_MLX,
     ENGINES,
@@ -84,8 +85,37 @@ def _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg) -> None:
         click.echo(f"  wrote: {out}")
 
 
+def _checked_engine(cfg) -> str:
+    """Resolve the engine and confirm its package is installed, before any download."""
+    from local_transcription_service.whisper_engine import EngineUnavailable, _require
+
+    try:
+        engine = resolve_engine(cfg)
+        _require({"qwen": "mlx_qwen3_asr", ENGINE_MLX: "mlx_whisper"}.get(engine, "faster_whisper"),
+                 engine)
+    except (ValueError, EngineUnavailable) as exc:
+        raise click.ClickException(str(exc)) from exc
+    return engine
+
+
+def _setup_models(cfg, load_config):
+    """Run model setup, then reload the config it wrote."""
+    from local_transcription_service.config import USER_CONFIG
+    from local_transcription_service.models import run_setup
+
+    chosen = run_setup(cfg)
+    cfg = load_config()
+    if cfg.model_path != chosen.resolve():         # the config loader resolves symlinks too
+        click.echo(
+            f"  warning: saved to {USER_CONFIG}, but model_path is overridden with "
+            f"{cfg.model_path} by a config.yaml here or above, WHISPER_MODEL_PATH, or --model-path.",
+            err=True,
+        )
+    return cfg
+
+
 def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
-              output_dir, format_set, diar_cfg) -> None:
+              output_dir, format_set, diar_cfg, source) -> None:
     """Transcribe the microphone until interrupted, then write the session.
 
     The full recording streams to disk as it is captured, pauses included, so
@@ -97,7 +127,8 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
 
     import soundfile as sf
 
-    from local_transcription_service.live import RATE, MicUnavailable, stream_utterances
+    from local_transcription_service.capture import CaptureUnavailable
+    from local_transcription_service.live import RATE, stream_utterances
     from local_transcription_service.whisper_engine import Segment, TranscriptResult, WordTiming
     from local_transcription_service.writers import write_outputs
 
@@ -125,8 +156,22 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     wav_out = stem.with_suffix(".wav")
 
     click.echo(f"Engine:     {engine} ({model_ref})")
+    click.echo("Source:     " + {
+        "mic": "microphone (the system input)",
+        "system": "system audio (what this computer plays)",
+        "both": "microphone + system audio",
+    }[source])
     click.echo(f"Recording:  {wav_out}")
     click.echo("Listening.  Pause between sentences. Ctrl+C to stop.\n")
+
+    def on_silence():
+        hint = (
+            "If something is playing, check that this terminal may record system audio "
+            "under System Settings > Privacy & Security."
+            if sys.platform == "darwin"
+            else "Is anything playing on the default output device?"
+        )
+        click.echo(f"  (10 seconds and no system audio yet. {hint})", err=True)
 
     segments: list[Segment] = []
     try:
@@ -138,6 +183,8 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
                 silence=silence,
                 should_stop=lambda: stopping["now"],
                 record=recording.write,
+                source=source,
+                on_silence=on_silence,
             ):
                 if not utterance.text:
                     continue
@@ -150,7 +197,7 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
                         words=[WordTiming(word=w, start=a, end=b) for w, a, b in utterance.words],
                     )
                 )
-    except MicUnavailable as exc:
+    except CaptureUnavailable as exc:
         wav_out.unlink(missing_ok=True)
         raise click.ClickException(str(exc)) from exc
 
@@ -310,9 +357,24 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     help="Input device name or index for --live. Default: the system input.",
 )
 @click.option(
+    "--source",
+    type=click.Choice(SOURCES),
+    default="mic",
+    show_default=True,
+    help="What --live listens to: mic, system (what this computer plays, e.g. the "
+         "other side of a meeting), or both. Nothing is rerouted: the system input "
+         "and output devices stay as they are.",
+)
+@click.option(
     "--list-devices",
     is_flag=True,
     help="List input devices and exit.",
+)
+@click.option(
+    "--setup",
+    is_flag=True,
+    help="Choose and download a speech model, then exit. Also runs by itself the "
+         "first time no model is configured.",
 )
 @click.option(
     "--silence",
@@ -349,7 +411,9 @@ def main(
     max_speakers: int | None,
     live: bool,
     input_device: str | None,
+    source: str,
     list_devices: bool,
+    setup: bool,
     silence: float,
     recursive: bool,
 ) -> None:
@@ -359,17 +423,22 @@ def main(
     omitted and the microphone is transcribed instead.
     """
     format_set = _parse_formats(formats)
-    cfg = resolve_whisper_config(
-        models_root=models_root,
-        model_path=model_path,
-        model_id=model_id,
-        language=language,
-        language_explicit=language is not None,
-        engine=engine,
-        device=device,
-        compute_type=compute_type,
-        context=context,
-    )
+
+    def load_config():
+        # Called again after model setup, which writes the user config.
+        return resolve_whisper_config(
+            models_root=models_root,
+            model_path=model_path,
+            model_id=model_id,
+            language=language,
+            language_explicit=language is not None,
+            engine=engine,
+            device=device,
+            compute_type=compute_type,
+            context=context,
+        )
+
+    cfg = load_config()
 
     want_words = word_timestamps if word_timestamps is not None else ("json" in format_set)
     if diarize:
@@ -402,6 +471,13 @@ def main(
             click.echo(f"  [{index}] {name}{'  <-- system input' if is_default else ''}")
         return
 
+    if source != "mic" and not live:
+        raise click.UsageError("--source applies to --live.")
+
+    if setup:
+        _setup_models(cfg, load_config)
+        return
+
     if diarize_only:
         # Before the engine preflight: this path never runs speech recognition,
         # so it must not demand an ASR backend be installed.
@@ -415,31 +491,22 @@ def main(
     if not live and path is None:
         raise click.UsageError("Missing argument 'PATH'. Use --live to read the microphone.")
 
-    try:
-        selected_engine = resolve_engine(cfg)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    from local_transcription_service.models import needs_setup
+
+    selected_engine = _checked_engine(cfg)
+    if needs_setup(cfg, selected_engine):
+        cfg = _setup_models(cfg, load_config)
+        # The downloaded model's format decides the engine (Whisper chosen on a Mac).
+        selected_engine = _checked_engine(cfg)
 
     model_ref, model_warning = resolve_model_ref(cfg, selected_engine)
-
-    from local_transcription_service.whisper_engine import EngineUnavailable, _require
-
-    try:
-        _require(
-            {"qwen": "mlx_qwen3_asr", ENGINE_MLX: "mlx_whisper"}.get(
-                selected_engine, "faster_whisper"
-            ),
-            selected_engine,
-        )
-    except EngineUnavailable as exc:
-        raise click.ClickException(str(exc)) from exc
 
     if live:
         # A live session always keeps a word-timed .json beside its .wav, so it can
         # be diarized later with --diarize-only instead of transcribed again. An
         # explicit --no-word-timestamps is still honoured.
         _run_live(cfg, model_ref, selected_engine, word_timestamps is not False,
-                  input_device, silence, output_dir, format_set | {"json"}, diar_cfg)
+                  input_device, silence, output_dir, format_set | {"json"}, diar_cfg, source)
         return
 
     try:

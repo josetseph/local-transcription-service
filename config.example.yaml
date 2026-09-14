@@ -48,9 +48,9 @@ diarization:
   # A plain pipeline folder needs no HuggingFace token: its config.yaml resolves
   # the $model/ sub-models relative to itself.
   model_path: ""
-  # Used when model_path is empty. Gated on HuggingFace - accept the model's
-  # conditions and set HF_TOKEN, or point model_path at a local copy instead.
-  model_id: pyannote/speaker-diarization-community-1
+  # Used when model_path is empty. This copy is byte-identical to the gated
+  # pyannote/speaker-diarization-community-1 but needs no HuggingFace token.
+  model_id: pyannote-community/speaker-diarization-community-1
   # Seconds between analysis windows. pyannote defaults to 1.0; 2.0 measured
   # ~1.9x faster at 95.7% agreement with that default on an M3. 3.0 begins
   # merging speakers.

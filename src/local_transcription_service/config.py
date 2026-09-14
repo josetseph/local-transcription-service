@@ -28,7 +28,7 @@ DEFAULT_COMPUTE_TYPE = "int8"
 
 MLX_WEIGHTS = ("weights.safetensors", "weights.npz")
 CT2_WEIGHTS = ("model.bin",)
-DEFAULT_DIARIZATION_MODEL_ID = "pyannote/speaker-diarization-community-1"
+DEFAULT_DIARIZATION_MODEL_ID = "pyannote-community/speaker-diarization-community-1"
 DEFAULT_DIARIZATION_STEP = 2.0
 
 CONFIG_FILENAMES = ("config.yaml",)
