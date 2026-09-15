@@ -238,7 +238,8 @@ transcribe PATH [OPTIONS]
   --word-timestamps    Per-word timings (default: on only for json output)
   --diarize            Label speakers (who spoke when)
   --diarize-only       Label a saved live session's transcript, no re-transcription
-  --source SOURCE      What --live hears: mic (default), system, or both
+  --record             Record until Ctrl+C, then transcribe the whole recording
+  --source SOURCE      What --live/--record hear: mic (default), system, or both
   --setup              Choose and download a speech model, then exit
   --diarization-step   Seconds between diarization windows (default 2.0)
   --speakers           Exact speaker count, when known
@@ -278,6 +279,22 @@ live-20260913-101500.json   word timings — lets you add speakers later
 
 The recording streams to disk as it is captured, so a crash keeps everything
 already heard.
+
+### Record now, transcribe after
+
+```bash
+transcribe --record                           # the microphone
+transcribe --record --source both --diarize   # a call, with speaker labels
+transcribe --record -o ~/Documents/calls
+```
+
+`--record` captures to `record-YYYYmmdd-HHMMSS.wav` — in `-o`, or the directory you
+ran it from — without transcribing while it runs. Ctrl+C stops it, and the whole
+recording is then transcribed like any file, with the transcript written beside the
+wav. The model hears full context instead of one sentence at a time, and nothing
+depends on pauses. `--source`, `--diarize`, `--format` and the rest apply as they do to
+files. The model is checked before recording starts, so a long recording never ends
+in a setup error.
 
 ### Meetings: capturing what the computer plays
 

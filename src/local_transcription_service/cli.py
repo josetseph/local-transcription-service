@@ -114,6 +114,69 @@ def _setup_models(cfg, load_config):
     return cfg
 
 
+def _silence_hint(source: str) -> str:
+    if source != "system":
+        return ("Check that the input device is unmuted and that this terminal has "
+                "microphone permission.")
+    if sys.platform == "darwin":
+        return ("If something is playing, check that this terminal may record system audio "
+                "under System Settings > Privacy & Security.")
+    return "Is anything playing on the default output device?"
+
+
+def _record(source, input_device, output_dir) -> Path:
+    """Record until Ctrl+C, straight to a wav, to be transcribed as a whole afterwards."""
+    import queue
+    import signal
+
+    import soundfile as sf
+
+    from local_transcription_service.capture import CaptureUnavailable, open_source
+    from local_transcription_service.live import FRAME_SECONDS, RATE
+
+    device = int(input_device) if input_device and input_device.isdigit() else input_device
+    stem_dir = (output_dir if output_dir is not None else Path.cwd()).resolve()
+    stem_dir.mkdir(parents=True, exist_ok=True)
+    wav = stem_dir / time.strftime("record-%Y%m%d-%H%M%S.wav")
+
+    stopping = {"now": False}
+    signal.signal(signal.SIGINT, lambda _sig, _frame: stopping.update(now=True))
+    frames: queue.Queue = queue.Queue()
+    count, heard = 0, False
+    click.echo(f"Recording:  {wav}")
+    click.echo("Ctrl+C to stop and transcribe.\n")
+    try:
+        with sf.SoundFile(str(wav), "w", samplerate=RATE, channels=1, subtype="PCM_16") as out:
+            with open_source(source, frames.put, rate=RATE, frame=int(RATE * FRAME_SECONDS),
+                             device=device):
+                while not stopping["now"]:
+                    try:
+                        chunk = frames.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+                    out.write(chunk)
+                    count += 1
+                    heard = heard or bool(chunk.any())
+                    if count == int(10 / FRAME_SECONDS) and not heard:
+                        click.echo(f"  (10 seconds of silence so far. {_silence_hint(source)})",
+                                   err=True)
+            while not frames.empty():                # captured before Ctrl+C: keep it
+                out.write(frames.get_nowait())
+                count += 1
+    except CaptureUnavailable as exc:
+        wav.unlink(missing_ok=True)
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        # Recording is over; a further Ctrl+C interrupts transcription normally.
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+
+    if not count:
+        wav.unlink(missing_ok=True)
+        raise click.ClickException("nothing was recorded.")
+    click.echo(f"\nRecorded {count * FRAME_SECONDS:.0f}s. Transcribing...")
+    return wav
+
+
 def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
               output_dir, format_set, diar_cfg, source) -> None:
     """Transcribe the microphone until interrupted, then write the session.
@@ -165,13 +228,7 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     click.echo("Listening.  Pause between sentences. Ctrl+C to stop.\n")
 
     def on_silence():
-        hint = (
-            "If something is playing, check that this terminal may record system audio "
-            "under System Settings > Privacy & Security."
-            if sys.platform == "darwin"
-            else "Is anything playing on the default output device?"
-        )
-        click.echo(f"  (10 seconds and no system audio yet. {hint})", err=True)
+        click.echo(f"  (10 seconds and no system audio yet. {_silence_hint('system')})", err=True)
 
     segments: list[Segment] = []
     try:
@@ -345,6 +402,12 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
          "the search (e.g. 8-12) instead of guessing an exact number.",
 )
 @click.option(
+    "--record",
+    is_flag=True,
+    help="Record (see --source) until Ctrl+C, then transcribe the whole recording at "
+         "once. Text comes only at the end, but the model hears full context.",
+)
+@click.option(
     "--live",
     is_flag=True,
     help="Transcribe the microphone instead of a file. Prints each sentence as "
@@ -361,7 +424,7 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     type=click.Choice(SOURCES),
     default="mic",
     show_default=True,
-    help="What --live listens to: mic, system (what this computer plays, e.g. the "
+    help="What --live and --record listen to: mic, system (what this computer plays, e.g. the "
          "other side of a meeting), or both. Nothing is rerouted: the system input "
          "and output devices stay as they are.",
 )
@@ -410,6 +473,7 @@ def main(
     min_speakers: int | None,
     max_speakers: int | None,
     live: bool,
+    record: bool,
     input_device: str | None,
     source: str,
     list_devices: bool,
@@ -419,8 +483,8 @@ def main(
 ) -> None:
     """Transcribe video or audio locally on the Apple Silicon GPU.
 
-    PATH may be a media file or a directory of media files. With --live, PATH is
-    omitted and the microphone is transcribed instead.
+    PATH may be a media file or a directory of media files. With --live or --record,
+    PATH is omitted and audio is captured instead.
     """
     format_set = _parse_formats(formats)
 
@@ -471,8 +535,8 @@ def main(
             click.echo(f"  [{index}] {name}{'  <-- system input' if is_default else ''}")
         return
 
-    if source != "mic" and not live:
-        raise click.UsageError("--source applies to --live.")
+    if source != "mic" and not (live or record):
+        raise click.UsageError("--source applies to --live and --record.")
 
     if setup:
         _setup_models(cfg, load_config)
@@ -488,8 +552,12 @@ def main(
         _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg)
         return
 
-    if not live and path is None:
-        raise click.UsageError("Missing argument 'PATH'. Use --live to read the microphone.")
+    if live and record:
+        raise click.UsageError("--live and --record are alternatives; choose one.")
+    if record and path is not None:
+        raise click.UsageError("--record makes its own recording; drop PATH.")
+    if not (live or record) and path is None:
+        raise click.UsageError("Missing argument 'PATH'. Use --live or --record to capture audio.")
 
     from local_transcription_service.models import needs_setup
 
@@ -508,6 +576,12 @@ def main(
         _run_live(cfg, model_ref, selected_engine, word_timestamps is not False,
                   input_device, silence, output_dir, format_set | {"json"}, diar_cfg, source)
         return
+
+    if record:
+        # Capture first, transcribe after: the model gets the whole recording as
+        # context instead of one sentence at a time. The engine and model were
+        # checked above, so a long recording never ends in a setup error.
+        path = _record(source, input_device, output_dir)
 
     try:
         media_files = collect_media_files(path, recursive=recursive)

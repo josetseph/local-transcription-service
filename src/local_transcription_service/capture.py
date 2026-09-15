@@ -1,4 +1,4 @@
-"""Audio sources for --live: the microphone, what the computer is playing, or both.
+"""Audio sources for --live and --record: the microphone, what the computer plays, or both.
 
 System audio is the other side of a meeting. It never reaches the microphone —
 it goes to the speakers — so it is captured separately, without rerouting
@@ -93,8 +93,11 @@ def _mic(on_frame, rate, frame, device):
     import sounddevice as sd
 
     stop = threading.Event()
-    stream = sd.InputStream(samplerate=rate, channels=1, dtype="float32",
-                            blocksize=frame, device=device, latency=1.0)
+    try:
+        stream = sd.InputStream(samplerate=rate, channels=1, dtype="float32",
+                                blocksize=frame, device=device, latency=1.0)
+    except (ValueError, sd.PortAudioError) as exc:   # e.g. an --input-device that does not exist
+        raise CaptureUnavailable(f"could not open the input device: {exc}") from exc
 
     def run():
         while not stop.is_set():
