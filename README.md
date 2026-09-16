@@ -291,7 +291,8 @@ transcribe --record -o ~/Documents/calls
 `--record` captures to `record-YYYYmmdd-HHMMSS.wav` — in `-o`, or the directory you
 ran it from — without transcribing while it runs. Ctrl+C stops it, and the whole
 recording is then transcribed like any file, with the transcript written beside the
-wav. The model hears full context instead of one sentence at a time, and nothing
+wav, along with a `.json` of word timings so `--diarize-only` can add speakers later
+without transcribing again. The model hears full context instead of one sentence at a time, and nothing
 depends on pauses. `--source`, `--diarize`, `--format` and the rest apply as they do to
 files. The model is checked before recording starts, so a long recording never ends
 in a setup error.
@@ -341,8 +342,8 @@ speakers, `both` disagreed with file mode on 62-73% of words, against 42-47% for
 transcribe --diarize-only live-20260913-101500.wav
 ```
 
-Diarization needs only the audio and the transcript's timestamps, and a live session
-keeps both. `--diarize-only` diarizes the `.wav`, labels each word in the existing
+Diarization needs only the audio and the transcript's timestamps, and a `--live` or
+`--record` session keeps both. `--diarize-only` diarizes the `.wav`, labels each word in the existing
 `.json`, and rewrites that session's `.txt`/`.srt`/`.json` in place — speech
 recognition never runs again. It is the same result `--live --diarize` gives, later.
 

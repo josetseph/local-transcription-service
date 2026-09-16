@@ -54,8 +54,9 @@ def _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg) -> None:
     audio = stem.with_suffix(".wav") if path.suffix.lower() == ".json" else path
     if not transcript.exists():
         raise click.ClickException(
-            f"no transcript at {transcript}. --diarize-only reads the .json saved beside "
-            "a live recording; to label any other file use --diarize."
+            f"no transcript at {transcript}. --diarize-only reads the word-timed .json "
+            "saved beside a --live or --record session; for any other recording run "
+            "--diarize, which transcribes it again."
         )
     if not audio.exists():
         raise click.ClickException(f"no recording at {audio}.")
@@ -567,6 +568,11 @@ def main(
         # The downloaded model's format decides the engine (Whisper chosen on a Mac).
         selected_engine = _checked_engine(cfg)
 
+    if selected_engine == "qwen" and word_timestamps is None and format_set & {"srt", "vtt"}:
+        # Qwen times text only through the aligner: without word timings every
+        # subtitle file came out as one cue from 00:00:00 to 00:00:00.
+        want_words = True
+
     model_ref, model_warning = resolve_model_ref(cfg, selected_engine)
 
     if live:
@@ -582,6 +588,10 @@ def main(
         # context instead of one sentence at a time. The engine and model were
         # checked above, so a long recording never ends in a setup error.
         path = _record(source, input_device, output_dir)
+        # Like a live session, keep a word-timed .json, so --diarize-only can add
+        # speakers later without transcribing again.
+        format_set = format_set | {"json"}
+        want_words = word_timestamps is not False
 
     try:
         media_files = collect_media_files(path, recursive=recursive)
