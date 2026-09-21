@@ -62,3 +62,11 @@ diarization:
   # Bounds when the exact count is unknown.
   min_speakers: null
   max_speakers: null
+
+# --summarize (optional; needs the "summarize" extra)
+summary:
+  # A GGUF chat model file, run in-process by llama.cpp. Nothing is downloaded.
+  model_path: ""
+  # Context window. 32768 holds about two and a half hours of speech in one pass; longer
+  # recordings are summarized in parts and merged. Lower it if memory is tight.
+  n_ctx: 32768

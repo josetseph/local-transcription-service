@@ -74,6 +74,10 @@ def _default_dict() -> dict[str, Any]:
             "token": None,
             "speakers": None,
         },
+        "summary": {
+            "model_path": "",
+            "n_ctx": 32768,
+        },
     }
 
 
@@ -380,3 +384,20 @@ def resolve_diarization_config(
         min_speakers=int(lo) if lo else None,
         max_speakers=int(hi) if hi else None,
     )
+
+
+def resolve_summary_config():
+    """Build a SummaryConfig, or raise ValueError saying what is missing."""
+    from local_transcription_service.summarize import SummaryConfig
+
+    raw = load_raw_config().get("summary") or {}
+    local = str(raw.get("model_path") or "").strip()
+    if not local:
+        raise ValueError(
+            "--summarize needs summary.model_path in config.yaml: a GGUF chat model file "
+            "(e.g. google_gemma-4-E4B-it-Q4_K_M.gguf)."
+        )
+    path = _expand(local)
+    if not path.is_file():
+        raise ValueError(f"summary.model_path {path} is not a file.")
+    return SummaryConfig(model_path=path, n_ctx=int(raw.get("n_ctx") or 32768))

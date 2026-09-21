@@ -226,7 +226,7 @@ transcribe PATH [OPTIONS]
   PATH                 Media file or directory
 
   -o, --output-dir     Write transcripts here (default: current directory)
-  -f, --format         txt,srt,vtt,json (default: txt,srt)
+  -f, --format         txt,srt,vtt,json,md (default: txt,srt)
   -l, --language       Language code (e.g. en); default auto-detect
   -r, --recursive      Recurse when PATH is a directory
   --models-root        Model download/cache directory
@@ -238,6 +238,7 @@ transcribe PATH [OPTIONS]
   --word-timestamps    Per-word timings (default: on only for json output)
   --diarize            Label speakers (who spoke when)
   --diarize-only       Label a saved live session's transcript, no re-transcription
+  --summarize          Head the md file with a title and summary from a local GGUF model
   --record             Record until Ctrl+C, then transcribe the whole recording
   --source SOURCE      What --live/--record hear: mic (default), system, or both
   --setup              Choose and download a speech model, then exit
@@ -449,6 +450,45 @@ would rather have pyannote's stock behaviour.
 
 For an 86-minute recording that works out to roughly 17 minutes of transcription
 plus 6 minutes of diarization.
+
+## Notes: markdown and a summary
+
+`-f md` writes the transcript as timestamped lines, one or two sentences each, with
+speakers numbered in the order they first speak:
+
+```text
+## Transcript
+[00:10] Speaker 1: So today is going to be essentially for corrections.
+[00:54] Speaker 2: Yeah.
+```
+
+`--summarize` puts a title and summary above it: what the session was, three to five
+topic sections, next steps with who took them on, and decisions made. It implies
+`-f md`. The summary comes from a GGUF chat model run in-process by llama.cpp, after
+speech recognition and diarization have released their memory; nothing leaves the
+machine and no server is involved.
+
+```bash
+CMAKE_ARGS="-DGGML_METAL=on" pip install 'llama-cpp-python>=0.3.34'   # the "summarize" extra
+transcribe lecture.m4a --diarize --summarize
+transcribe --diarize-only record-20260917-132001.wav --summarize     # a saved session
+```
+
+```yaml
+summary:
+  model_path: ~/models/gguf/google_gemma-4-E4B-it-Q4_K_M.gguf
+  n_ctx: 32768
+```
+
+Measured on an M3 with Gemma 4 E4B (Q4_K_M): an 86-minute class is 15,700 tokens of
+summary input, so a 32k window holds about two and a half hours in one pass. Longer
+recordings are noted part by part and summarized from the notes. Diarizing and
+summarizing that class from its saved transcript took under 9 minutes together.
+
+The summary is only as good as the transcript. Speech recognition mishears names
+and jargon, and the model is told to drop what makes no sense rather than guess,
+so check figures and names against the transcript below it. If the model fails to
+load or the prompt does not fit, the md is still written, without a summary.
 
 ## Environment variables
 

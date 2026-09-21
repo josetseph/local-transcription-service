@@ -38,6 +38,9 @@ Issues = "https://github.com/josetseph/local-transcription-service/issues"
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.5"]
 diarize = ["pyannote.audio>=4.0"]
+# --summarize. On Apple Silicon build with Metal:
+#   CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python
+summarize = ["llama-cpp-python>=0.3.34"]
 # Force an engine regardless of platform (e.g. faster-whisper on Apple Silicon).
 mlx = ["mlx-whisper>=0.4"]
 qwen = ["mlx-qwen3-asr>=0.4"]

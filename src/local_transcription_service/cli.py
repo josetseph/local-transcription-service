@@ -16,6 +16,7 @@ from local_transcription_service.config import (
     resolve_diarization_config,
     resolve_engine,
     resolve_model_ref,
+    resolve_summary_config,
     resolve_whisper_config,
 )
 from local_transcription_service.media import collect_media_files, extract_whisper_wav
@@ -36,7 +37,22 @@ def _parse_formats(value: str) -> set[str]:
     return parts
 
 
-def _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg) -> None:
+def _summary(result, summary_cfg) -> str:
+    """The markdown summary, or "" with a warning: a transcript that took many
+    minutes to make is never lost to a failed summary."""
+    if summary_cfg is None:
+        return ""
+    from local_transcription_service.summarize import summarize
+
+    click.echo(f"Summarizing with {summary_cfg.model_path.name}...")
+    try:
+        return summarize(result, summary_cfg)
+    except Exception as exc:
+        click.echo(f"  warning: no summary ({exc}); the md is written without one.", err=True)
+        return ""
+
+
+def _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg, summary_cfg=None) -> None:
     """Label speakers on an existing transcript, without transcribing again.
 
     Diarization needs only audio plus the transcript's timestamps. A live session
@@ -64,6 +80,15 @@ def _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg) -> None:
     result = TranscriptResult.from_dict(json.loads(transcript.read_text(encoding="utf-8")))
     if not result.segments:
         raise click.ClickException(f"{transcript} has no segments to label.")
+    # Transcripts saved before punctuation restoration tolerated a word-count
+    # mismatch have bare words but a punctuated text; repair them from it.
+    from local_transcription_service.whisper_engine import _group_words, _restore_punctuation
+
+    words = [w for seg in result.segments for w in seg.words]
+    if words and result.text and not any(w.word[-1:] in ".?!," for w in words):
+        _restore_punctuation(words, result.text.split())
+        result.segments = _group_words(words)
+        click.echo("  note: restored punctuation to this transcript's words from its text.")
     missing = sum(1 for seg in result.segments if not seg.words)
     if missing:
         click.echo(
@@ -82,7 +107,8 @@ def _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg) -> None:
 
     target = output_dir.resolve() if output_dir is not None else stem.parent
     target.mkdir(parents=True, exist_ok=True)
-    for out in write_outputs(result, target / stem.name, format_set | {"json"}):
+    for out in write_outputs(result, target / stem.name, format_set | {"json"},
+                             summary=_summary(result, summary_cfg)):
         click.echo(f"  wrote: {out}")
 
 
@@ -179,7 +205,7 @@ def _record(source, input_device, output_dir) -> Path:
 
 
 def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
-              output_dir, format_set, diar_cfg, source) -> None:
+              output_dir, format_set, diar_cfg, source, summary_cfg=None) -> None:
     """Transcribe the microphone until interrupted, then write the session.
 
     The full recording streams to disk as it is captured, pauses included, so
@@ -285,6 +311,9 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
         click.echo(f"  speakers: {len(found)} ({', '.join(found)})")
         written = write_outputs(result, stem, format_set)
 
+    if summary_cfg is not None:
+        written = write_outputs(result, stem, format_set, summary=_summary(result, summary_cfg))
+
     for out in written:
         click.echo(f"  wrote: {out}")
 
@@ -304,7 +333,7 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     "formats",
     default="txt,srt",
     show_default=True,
-    help="Comma-separated outputs: txt,srt,vtt,json.",
+    help="Comma-separated outputs: txt,srt,vtt,json,md.",
 )
 @click.option(
     "-l",
@@ -403,6 +432,14 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
          "the search (e.g. 8-12) instead of guessing an exact number.",
 )
 @click.option(
+    "--summarize",
+    is_flag=True,
+    help="Write an md file headed by a title and summary (topics, next steps, "
+         "decisions) from a local GGUF chat model. Requires the 'summarize' extra "
+         "and summary.model_path in config.yaml. With --diarize-only it summarizes "
+         "a saved transcript without transcribing again.",
+)
+@click.option(
     "--record",
     is_flag=True,
     help="Record (see --source) until Ctrl+C, then transcribe the whole recording at "
@@ -473,6 +510,7 @@ def main(
     speakers: int | None,
     min_speakers: int | None,
     max_speakers: int | None,
+    summarize: bool,
     live: bool,
     record: bool,
     input_device: str | None,
@@ -529,6 +567,22 @@ def main(
         else None
     )
 
+    summary_cfg = None
+    if summarize:
+        # Checked now, so a long transcription never ends in a setup error.
+        from importlib.util import find_spec
+
+        if find_spec("llama_cpp") is None:
+            raise click.ClickException(
+                "--summarize needs llama-cpp-python: pip install "
+                "'local-transcription-service[summarize]'"
+            )
+        try:
+            summary_cfg = resolve_summary_config()
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        format_set = format_set | {"md"}
+
     if list_devices:
         from local_transcription_service.live import list_input_devices
 
@@ -550,7 +604,7 @@ def main(
             raise click.UsageError("--diarize-only works on a saved recording, not with --live.")
         if path is None:
             raise click.UsageError("--diarize-only needs PATH: the recording to label.")
-        _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg)
+        _run_diarize_only(path, diar_cfg, output_dir, format_set, cfg, summary_cfg)
         return
 
     if live and record:
@@ -580,7 +634,8 @@ def main(
         # be diarized later with --diarize-only instead of transcribed again. An
         # explicit --no-word-timestamps is still honoured.
         _run_live(cfg, model_ref, selected_engine, word_timestamps is not False,
-                  input_device, silence, output_dir, format_set | {"json"}, diar_cfg, source)
+                  input_device, silence, output_dir, format_set | {"json"}, diar_cfg, source,
+                  summary_cfg)
         return
 
     if record:
@@ -654,7 +709,8 @@ def main(
             stem_dir = (output_dir if output_dir is not None else Path.cwd()).resolve()
             stem_dir.mkdir(parents=True, exist_ok=True)
             stem = stem_dir / media.stem
-            written = write_outputs(result, stem, format_set)
+            written = write_outputs(result, stem, format_set,
+                                    summary=_summary(result, summary_cfg))
             lang = result.language or "unknown"
             click.echo(f"  language: {lang}")
             for out in written:
