@@ -435,8 +435,9 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     "--summarize",
     is_flag=True,
     help="Write an md file headed by a title and summary (topics, next steps, "
-         "decisions) from a local GGUF chat model. Requires the 'summarize' extra "
-         "and summary.model_path in config.yaml. With --diarize-only it summarizes "
+         "decisions) from a local GGUF chat model. Requires the 'summarize' extra; "
+         "the model (5.4 GB) downloads the first time unless summary.model_path "
+         "names one. With --diarize-only it summarizes "
          "a saved transcript without transcribing again.",
 )
 @click.option(
@@ -578,7 +579,13 @@ def main(
                 "'local-transcription-service[summarize]'"
             )
         try:
-            summary_cfg = resolve_summary_config()
+            try:
+                summary_cfg = resolve_summary_config()
+            except LookupError:
+                from local_transcription_service.models import setup_summary_model
+
+                setup_summary_model(cfg.models_root)
+                summary_cfg = resolve_summary_config()
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
         format_set = format_set | {"md"}

@@ -43,3 +43,24 @@ def test_language_defaults_to_english_and_auto_is_explicit(tmp_path, monkeypatch
     assert config.resolve_whisper_config().language == "en"          # null is not "detect"
     assert config.resolve_whisper_config(language="auto", language_explicit=True).language is None
     assert config.resolve_whisper_config(language="fr", language_explicit=True).language == "fr"
+
+
+def test_summary_model_already_on_disk_is_saved_not_downloaded(tmp_path, monkeypatch):
+    import yaml
+
+    from local_transcription_service import config, models
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    gguf = tmp_path / "models" / "gguf" / models.SUMMARIZER.allow[0]
+    gguf.parent.mkdir(parents=True)
+    gguf.write_bytes(b"gguf")
+    try:
+        config.resolve_summary_config()
+        raise AssertionError("expected LookupError before setup")
+    except LookupError:
+        pass
+    assert models.setup_summary_model(tmp_path / "models") == gguf      # no network: file exists
+    saved = yaml.safe_load(config.USER_CONFIG.expanduser().read_text())
+    assert saved["summary"]["model_path"] == str(gguf)
+    assert config.resolve_summary_config().model_path == gguf.resolve()

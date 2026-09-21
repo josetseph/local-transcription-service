@@ -474,6 +474,10 @@ transcribe lecture.m4a --diarize --summarize
 transcribe --diarize-only record-20260917-132001.wav --summarize     # a saved session
 ```
 
+The first `--summarize` downloads Gemma 4 E4B (Q4_K_M, 5.4 GB, no HuggingFace
+account needed) to `<models_root>/gguf` and saves its path, like the speech model
+setup. To use a GGUF you already have, name it instead:
+
 ```yaml
 summary:
   model_path: ~/models/gguf/google_gemma-4-E4B-it-Q4_K_M.gguf

@@ -391,16 +391,13 @@ def resolve_diarization_config(
 
 
 def resolve_summary_config():
-    """Build a SummaryConfig, or raise ValueError saying what is missing."""
+    """Build a SummaryConfig. LookupError: none configured yet; ValueError: a bad path."""
     from local_transcription_service.summarize import SummaryConfig
 
     raw = load_raw_config().get("summary") or {}
     local = str(raw.get("model_path") or "").strip()
     if not local:
-        raise ValueError(
-            "--summarize needs summary.model_path in config.yaml: a GGUF chat model file "
-            "(e.g. google_gemma-4-E4B-it-Q4_K_M.gguf)."
-        )
+        raise LookupError("no summary.model_path configured")
     path = _expand(local)
     if not path.is_file():
         raise ValueError(f"summary.model_path {path} is not a file.")

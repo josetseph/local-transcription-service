@@ -65,6 +65,32 @@ ALIGNER = Model("qwen3-forced-aligner-0.6b", "Qwen3 forced aligner", "Qwen/Qwen3
 DIARIZER = Model("pyannote-community-1", "pyannote community-1",
                  "pyannote-community/speaker-diarization-community-1", 0.03, "speaker labels",
                  ignore=["*.gif"])
+# The summary model for --summarize: one GGUF file, fetched the first time it is asked for.
+SUMMARIZER = Model("gguf", "Gemma 4 E4B (Q4_K_M)", "bartowski/google_gemma-4-E4B-it-GGUF", 5.4,
+                   "titles and summaries", allow=["google_gemma-4-E4B-it-Q4_K_M.gguf"])
+
+
+def setup_summary_model(root: Path) -> Path:
+    """Download the summary model unless it is already under ``root``; save its path."""
+    target = root / SUMMARIZER.folder
+    file = target / SUMMARIZER.allow[0]
+    if not file.is_file():
+        target.mkdir(parents=True, exist_ok=True)
+        free = shutil.disk_usage(target).free / 1e9
+        if SUMMARIZER.gb > free:
+            raise click.ClickException(
+                f"{target} has {free:.1f} GB free; the summary model needs {SUMMARIZER.gb:.1f} GB."
+            )
+        from huggingface_hub import snapshot_download
+
+        click.echo(f"Downloading {SUMMARIZER.label} ({SUMMARIZER.gb:.2g} GB) to {target}")
+        snapshot_download(SUMMARIZER.repo, local_dir=target, allow_patterns=SUMMARIZER.allow)
+    path = USER_CONFIG.expanduser()
+    saved = _deep_merge(_load_yaml(path), {"summary": {"model_path": str(file)}})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(saved, sort_keys=False), encoding="utf-8")
+    click.echo(f"Saved to {path}\n")
+    return file
 
 
 def needs_setup(cfg: WhisperConfig, engine: str) -> bool:
