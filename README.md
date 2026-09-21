@@ -425,11 +425,15 @@ individual words, so `--word-timestamps` turns on automatically.
 
 ### Speed, and the `--diarization-step` trade
 
-Diarization runs on **CPU** — pyannote is a PyTorch model with no working Metal
-path, so unlike the Whisper pass it cannot use the GPU. It is the slower half of
-the pipeline. Roughly 95% of its time goes to one speaker-embedding pass per
-analysis window, so cost scales with the number of windows — which is what
-`--diarization-step` controls.
+Diarization runs on the **GPU** where there is one: Metal on Apple Silicon, CUDA
+elsewhere, CPU as the fallback. Measured on an M3 (torch 2.13, pyannote 4.0.7)
+over a 10-minute lecture slice at the default step: 40s on the GPU against 284s on
+CPU, about 15x realtime, with identical speaker turns. Roughly 95% of its time
+goes to one speaker-embedding pass per analysis window, so cost scales with the
+number of windows — which is what `--diarization-step` controls.
+
+The step comparison below was measured on CPU; the speeds are relative, the
+agreement figures do not depend on the device.
 
 Measured on an M3 over a 10-minute meeting recording:
 
@@ -443,8 +447,8 @@ Measured on an M3 over a 10-minute meeting recording:
 pyannote models does. 3.0 is a cliff, not a further trade. Drop to `1.0` if you
 would rather have pyannote's stock behaviour.
 
-For an 81-minute recording that works out to roughly 26 minutes of transcription
-plus 24 minutes of diarization.
+For an 86-minute recording that works out to roughly 17 minutes of transcription
+plus 6 minutes of diarization.
 
 ## Environment variables
 

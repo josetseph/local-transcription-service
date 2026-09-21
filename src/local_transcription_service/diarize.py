@@ -1,6 +1,6 @@
 """Speaker diarization via pyannote.audio, and merging it onto transcript words.
 
-Measured on an M3 over a 10-minute meeting chunk (see README): the pipeline's
+Measured on an M3's CPU over a 10-minute meeting chunk (see README): the pipeline's
 default 1.0s segmentation step runs at 1.83x realtime, while a 2.0s step runs at
 3.42x and still agrees with the default on 95.7% of speech — a smaller change
 than the gap between two different pyannote pipelines. 3.0s collapses two
@@ -76,7 +76,15 @@ def diarize_audio(
                 f"Could not load {cfg.model_id}. Gated models need a HuggingFace token "
                 "(set HF_TOKEN) and acceptance of the model's conditions."
             )
-        pipeline.to(torch.device("cpu"))
+        # Measured on an M3, torch 2.13 / pyannote 4.0.7, 10-minute lecture slice:
+        # mps 40s vs cpu 284s, with identical turns.
+        if torch.backends.mps.is_available():
+            device = "mps"
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
+        pipeline.to(torch.device(device))
 
         # Fewer, wider windows are the one lever that actually speeds this up:
         # cost scales with the number of windows, since ~95% of the time is the
