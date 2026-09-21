@@ -191,13 +191,9 @@ def _transcribe_qwen(
             for e in entries
             if str(e.get("text") or "").strip()
         ]
-        # The aligner strips punctuation from each word, but raw text keeps it
-        # and the two are token-for-token identical. Restore it, so cues break
-        # on sentences and the transcript stays readable.
-        tokens = (getattr(raw, "text", "") or "").split()
-        if len(tokens) == len(words):
-            for word, token in zip(words, tokens):
-                word.word = token
+        # The aligner strips punctuation from each word, but raw text keeps it.
+        # Restore it, so cues break on sentences and the transcript stays readable.
+        _restore_punctuation(words, (getattr(raw, "text", "") or "").split())
         segments = _group_words(words)
         full_text = (getattr(raw, "text", "") or "").strip()
         if not segments and full_text:
@@ -207,6 +203,27 @@ def _transcribe_qwen(
         return TranscriptResult(text=full_text, language=detected, segments=segments)
     finally:
         release_accelerator_memory()
+
+
+def _bare(token: str) -> str:
+    return "".join(ch for ch in token.lower() if ch.isalnum())
+
+
+def _restore_punctuation(words: list[WordTiming], tokens: list[str]) -> None:
+    """Give each aligned word the punctuated token it came from.
+
+    The two sequences are nearly identical but not always the same length: over
+    an 86-minute recording the aligner returned 14 more words than the text had
+    tokens, and an all-or-nothing length check then dropped every full stop in
+    the file. Matching runs keeps the punctuation everywhere they agree.
+    """
+    from difflib import SequenceMatcher
+
+    matcher = SequenceMatcher(None, [_bare(w.word) for w in words],
+                              [_bare(t) for t in tokens], autojunk=False)
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            words[block.a + offset].word = tokens[block.b + offset]
 
 
 MAX_CUE_SECONDS = 12.0
