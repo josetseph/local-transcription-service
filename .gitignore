@@ -29,3 +29,6 @@ config.yaml
 
 # stray mlx-qwen3-asr --mic output
 microphone-*.txt
+
+# Local recordings and their transcripts: large, and other people's voices
+transcripts/
