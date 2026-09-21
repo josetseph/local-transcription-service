@@ -111,7 +111,7 @@ whisper:
   models_root: ~/.cache/whisper-models   # or /path/on/external/drive
   model_path: ""                         # e.g. .../whisper-large-v3-mlx
   model_id: mlx-community/whisper-large-v3-mlx
-  language: null
+  language: en        # or auto to detect
 ```
 
 ### Option C — CLI flags
@@ -227,7 +227,7 @@ transcribe PATH [OPTIONS]
 
   -o, --output-dir     Write transcripts here (default: current directory)
   -f, --format         txt,srt,vtt,json,md (default: txt,srt)
-  -l, --language       Language code (e.g. en); default auto-detect
+  -l, --language       Language code (e.g. en), or auto to detect; default en
   -r, --recursive      Recurse when PATH is a directory
   --models-root        Model download/cache directory
   --model-path         Local model directory (MLX or CTranslate2)
@@ -258,7 +258,7 @@ Supported media includes common video (`mp4`, `mov`, `mkv`, `webm`, …) and aud
 
 ```bash
 transcribe --live                       # prints each sentence as you pause
-transcribe --live -l en                 # pin the language (recommended)
+transcribe --live -l fr                 # another language (default: en)
 transcribe --live -o ~/Documents        # write the session elsewhere
 transcribe --live --silence 0.4         # cut sooner after you stop talking
 transcribe --list-devices               # show input devices
@@ -366,8 +366,8 @@ The plain transcript is written first, so interrupting diarization loses nothing
 Word timings cost about 0.02s per sentence and use the forced-aligner model, set
 with `whisper.aligner_path`.
 
-Pin `-l en` for live work — language is otherwise detected per utterance, and a
-two-second utterance gives the detector very little to go on.
+The language defaults to English. Avoid `-l auto` for live work: it detects per
+utterance, and a two-second utterance gives the detector very little to go on.
 
 ### How sentences are detected
 
@@ -500,7 +500,7 @@ load or the prompt does not fit, the md is still written, without a summary.
 | `WHISPER_ENGINE` | `auto`, `mlx`, or `faster-whisper` |
 | `WHISPER_DEVICE` | faster-whisper only: `auto`, `cpu`, `cuda` |
 | `WHISPER_COMPUTE_TYPE` | faster-whisper only: `int8`, `float16` |
-| `WHISPER_LANGUAGE` | Language code, or empty/`auto` for detect |
+| `WHISPER_LANGUAGE` | Language code, or `auto` to detect (default `en`) |
 | `HF_TOKEN` | Only for a gated model you configure yourself; the defaults need none |
 
 ## Troubleshooting

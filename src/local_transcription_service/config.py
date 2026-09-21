@@ -31,6 +31,11 @@ CT2_WEIGHTS = ("model.bin",)
 DEFAULT_DIARIZATION_MODEL_ID = "pyannote-community/speaker-diarization-community-1"
 DEFAULT_DIARIZATION_STEP = 2.0
 
+# English unless told otherwise. On auto-detect Qwen drifted into Hindi and
+# Chinese partway through English lectures, so detection is opt-in: "auto".
+DEFAULT_LANGUAGE = "en"
+AUTO_LANGUAGE = "auto"
+
 CONFIG_FILENAMES = ("config.yaml",)
 USER_CONFIG = Path("~/.config/local-transcription-service/config.yaml")
 
@@ -61,7 +66,7 @@ def _default_dict() -> dict[str, Any]:
             "model_path": "",
             # null means "pick the default for the selected engine"
             "model_id": None,
-            "language": None,
+            "language": DEFAULT_LANGUAGE,
             "engine": DEFAULT_ENGINE,
             "context": "",
             "aligner_path": "",
@@ -124,9 +129,8 @@ def _env_overlay() -> dict[str, Any]:
         whisper["device"] = value
     if value := os.environ.get("WHISPER_COMPUTE_TYPE"):
         whisper["compute_type"] = value
-    if "WHISPER_LANGUAGE" in os.environ:
-        lang = os.environ.get("WHISPER_LANGUAGE") or None
-        whisper["language"] = lang if lang and lang.lower() not in ("", "null", "none", "auto") else None
+    if value := os.environ.get("WHISPER_LANGUAGE"):
+        whisper["language"] = value
     return {"whisper": whisper} if whisper else {}
 
 
@@ -167,12 +171,12 @@ def resolve_whisper_config(
     ctx = context if context is not None else (raw.get("context") or "")
     aligner_raw = aligner_path if aligner_path is not None else (raw.get("aligner_path") or "")
 
-    if language_explicit:
-        lang = language
-    else:
-        lang = raw.get("language")
-        if lang is not None and str(lang).lower() in ("", "null", "none", "auto"):
-            lang = None
+    # Unset or null anywhere means the default, not detection: a stray
+    # "language: null" in one config file must not undo "en" in another.
+    lang = (language if language_explicit else raw.get("language")) or DEFAULT_LANGUAGE
+    lang = str(lang).strip().lower()
+    if lang == AUTO_LANGUAGE:
+        lang = None
 
     local: Path | None = None
     if str(path_raw).strip():

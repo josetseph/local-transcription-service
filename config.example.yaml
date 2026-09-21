@@ -28,8 +28,9 @@ whisper:
   #   faster-whisper  Systran/faster-whisper-large-v3
   model_id: null
 
-  # null = auto-detect
-  language: null
+  # A language code, or auto to detect it. Unset or null means en: on auto-detect
+  # Qwen drifted into Hindi and Chinese partway through English lectures.
+  language: en
 
   # Space-separated domain terms biasing recognition (qwen only). Only helps for
   # words actually spoken; padding it out risks the model inserting them.

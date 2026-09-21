@@ -32,3 +32,14 @@ def test_punctuation_survives_an_aligner_word_count_mismatch():
     words = [WordTiming(w, 0.0, 0.0) for w in ["so", "yes", "uh", "okay", "next"]]
     _restore_punctuation(words, "So, yes. Okay, next.".split())      # aligner heard an extra "uh"
     assert [w.word for w in words] == ["So,", "yes.", "uh", "Okay,", "next."]
+
+
+def test_language_defaults_to_english_and_auto_is_explicit(tmp_path, monkeypatch):
+    from local_transcription_service import config
+
+    (tmp_path / "config.yaml").write_text("whisper:\n  language: null\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WHISPER_LANGUAGE", raising=False)
+    assert config.resolve_whisper_config().language == "en"          # null is not "detect"
+    assert config.resolve_whisper_config(language="auto", language_explicit=True).language is None
+    assert config.resolve_whisper_config(language="fr", language_explicit=True).language == "fr"

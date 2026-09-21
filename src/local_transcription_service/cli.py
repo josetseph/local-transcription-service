@@ -339,7 +339,7 @@ def _run_live(cfg, model_ref, engine, want_words, input_device, silence,
     "-l",
     "--language",
     default=None,
-    help="Language code (e.g. en). Default: auto-detect / config.",
+    help="Language code (e.g. en, fr), or auto to detect it. Default: en / config.",
 )
 @click.option(
     "--models-root",
